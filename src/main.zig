@@ -6,7 +6,7 @@ fn serialize(comptime T: type, data: T, list: *ArrayList(u8)) !void {
     const info = @typeInfo(T);
     return switch (info) {
         .Int => switch (data) {
-            0...127 => list.append(data),
+            0...127 => list.append(@truncate(u8, data)),
 
             else => {
                 try list.append(128 + @sizeOf(T));
@@ -36,8 +36,18 @@ test "serialize an integer" {
     try testing.expect(std.mem.eql(u8, list.items[0..], expected3[0..]));
 
     list.clearRetainingCapacity();
-    testing.expect(std.mem.eql(u8, try serialize(u16, 0xabcd, &list), [_]u8{ 129, 0xab, 0xcd }));
+    try serialize(u16, 0xabcd, &list);
+    const expected4 = [_]u8{ 130, 0xab, 0xcd };
+    try testing.expect(std.mem.eql(u8, list.items[0..], expected4[0..]));
+
+    // Check that multi-byte values that are < 128 also serialize as a
+    // single byte integer.
+    list.clearRetainingCapacity();
+    try serialize(u16, 42, &list);
+    try testing.expect(std.mem.eql(u8, list.items[0..], expected1[0..]));
 
     list.clearRetainingCapacity();
-    testing.expect(std.mem.eql(u8, try serialize(u32, 0xdeadbeef, &list), [_]u8{ 129, 0xde, 0xad, 0xbe, 0xef }));
+    try serialize(u32, 0xdeadbeef, &list);
+    const expected6 = [_]u8{ 132, 0xde, 0xad, 0xbe, 0xef };
+    try testing.expect(std.mem.eql(u8, list.items[0..], expected6[0..]));
 }
