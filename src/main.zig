@@ -13,10 +13,15 @@ fn serialize(comptime T: type, data: T, list: *ArrayList(u8)) !void {
                 try list.writer().writeIntBig(T, data);
             },
         },
+        .Array => {
+            if (@sizeOf(info.Array.child) == 1) {
+                try list.append(128 + data.len);
+                _ = try list.writer().write(data[0..]);
+            } else return error.UnsupportedType;
+        },
         else => return error.UnsupportedType,
     };
 }
-
 
 test "serialize an integer" {
     var list = ArrayList(u8).init(testing.allocator);
@@ -50,4 +55,13 @@ test "serialize an integer" {
     try serialize(u32, 0xdeadbeef, &list);
     const expected6 = [_]u8{ 132, 0xde, 0xad, 0xbe, 0xef };
     try testing.expect(std.mem.eql(u8, list.items[0..], expected6[0..]));
+}
+
+test "serialize a byte array" {
+    var list = ArrayList(u8).init(testing.allocator);
+    defer list.deinit();
+    const src = [_]u8{ 1, 2, 3, 4 };
+    try serialize([4]u8, src, &list);
+    const expected = [_]u8{ 132, 1, 2, 3, 4 };
+    try testing.expect(std.mem.eql(u8, list.items[0..], expected[0..]));
 }
