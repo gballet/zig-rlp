@@ -14,10 +14,19 @@ fn serialize(comptime T: type, data: T, list: *ArrayList(u8)) !void {
             },
         },
         .Array => {
+            // shortcut for byte lists
             if (@sizeOf(info.Array.child) == 1) {
                 try list.append(128 + data.len);
                 _ = try list.writer().write(data[0..]);
-            } else return error.UnsupportedType;
+            } else {
+                // This only works for short byte sequences
+                const size_index = list.items.len;
+                try list.append(0);
+                for (data) |item| {
+                    try serialize(info.Array.child, item, list);
+                }
+                list.items[size_index] = 128 + @truncate(u8, list.items.len - size_index - 1);
+            }
         },
         else => return error.UnsupportedType,
     };
@@ -64,4 +73,10 @@ test "serialize a byte array" {
     try serialize([4]u8, src, &list);
     const expected = [_]u8{ 132, 1, 2, 3, 4 };
     try testing.expect(std.mem.eql(u8, list.items[0..], expected[0..]));
+
+    list.clearRetainingCapacity();
+    const src16 = [_]u16{ 0xabcd, 0xef01 };
+    try serialize([2]u16, src16, &list);
+    const expected16 = [_]u8{ 134, 130, 0xab, 0xcd, 130, 0xef, 0x01 };
+    try testing.expect(std.mem.eql(u8, list.items[0..], expected16[0..]));
 }
