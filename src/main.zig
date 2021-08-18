@@ -16,7 +16,24 @@ fn serialize(comptime T: type, data: T, list: *ArrayList(u8)) !void {
         .Array => {
             // shortcut for byte lists
             if (@sizeOf(info.Array.child) == 1) {
-                try list.append(128 + data.len);
+                if (data.len < 56) {
+                    try list.append(128 + data.len);
+                } else {
+                    comptime var length_length = 0;
+                    comptime {
+                        var l = @sizeOf(T);
+                        while (l != 0) : (l >>= 8) {
+                            length_length += 1;
+                        }
+                    }
+                    try list.append(183 + length_length);
+                    comptime var i = 0;
+                    comptime var length = @sizeOf(T);
+                    inline while (i < length_length) : (i += 1) {
+                        try list.append(@truncate(u8, length));
+                        length >>= 8;
+                    }
+                }
                 _ = try list.writer().write(data[0..]);
             } else {
                 // This only works for short byte sequences
@@ -79,4 +96,11 @@ test "serialize a byte array" {
     try serialize([2]u16, src16, &list);
     const expected16 = [_]u8{ 134, 130, 0xab, 0xcd, 130, 0xef, 0x01 };
     try testing.expect(std.mem.eql(u8, list.items[0..], expected16[0..]));
+
+    list.clearRetainingCapacity();
+    const src8x58 = [_]u8{0xab} ** 58;
+    try serialize([58]u8, src8x58, &list);
+    const expected8x58 = [_]u8{ 0xb8, 0x3a } ++ [_]u8{0xab} ** 58;
+    std.debug.print("{}\n", .{std.fmt.fmtSliceHexLower(list.items[0..])});
+    try testing.expect(std.mem.eql(u8, list.items[0..], expected8x58[0..]));
 }
