@@ -36,13 +36,27 @@ fn serialize(comptime T: type, data: T, list: *ArrayList(u8)) !void {
                 }
                 _ = try list.writer().write(data[0..]);
             } else {
-                // This only works for short byte sequences
-                const size_index = list.items.len;
-                try list.append(0);
+                var tlist = ArrayList(u8).init(testing.allocator);
+                defer tlist.deinit();
                 for (data) |item| {
-                    try serialize(info.Array.child, item, list);
+                    try serialize(info.Array.child, item, &tlist);
                 }
-                list.items[size_index] = 128 + @truncate(u8, list.items.len - size_index - 1);
+
+                if (tlist.items.len < 56) {
+                    try list.append(128 + @truncate(u8, tlist.items.len));
+                } else {
+                    const index = list.items.len;
+                    try list.append(10);
+                    var length = tlist.items.len;
+                    var length_length: u8 = 0;
+                    while (length != 0) : (length >>= 8) {
+                        try list.append(@truncate(u8, length));
+                        length_length += 1;
+                    }
+
+                    list.items[index] = 183 + length_length;
+                }
+                _ = try list.writer().write(tlist.items);
             }
         },
         else => return error.UnsupportedType,
@@ -92,15 +106,29 @@ test "serialize a byte array" {
     try testing.expect(std.mem.eql(u8, list.items[0..], expected[0..]));
 
     list.clearRetainingCapacity();
+    const src8x58 = [_]u8{0xab} ** 58;
+    try serialize([58]u8, src8x58, &list);
+    const expected8x58 = [_]u8{ 0xb8, 0x3a } ++ [_]u8{0xab} ** 58;
+    try testing.expect(std.mem.eql(u8, list.items[0..], expected8x58[0..]));
+
+    list.clearRetainingCapacity();
+    const src8x1K = [_]u8{0xab} ** 1024;
+    try serialize(@TypeOf(src8x1K), src8x1K, &list);
+    const expected8x1K = [_]u8{ 0xb9, 0x00, 0x04 } ++ [_]u8{0xab} ** 1024;
+    try testing.expect(std.mem.eql(u8, list.items[0..], expected8x1K[0..]));
+}
+
+test "serialize a u16 array" {
+    var list = ArrayList(u8).init(testing.allocator);
+    defer list.deinit();
     const src16 = [_]u16{ 0xabcd, 0xef01 };
     try serialize([2]u16, src16, &list);
     const expected16 = [_]u8{ 134, 130, 0xab, 0xcd, 130, 0xef, 0x01 };
     try testing.expect(std.mem.eql(u8, list.items[0..], expected16[0..]));
 
     list.clearRetainingCapacity();
-    const src8x58 = [_]u8{0xab} ** 58;
-    try serialize([58]u8, src8x58, &list);
-    const expected8x58 = [_]u8{ 0xb8, 0x3a } ++ [_]u8{0xab} ** 58;
-    std.debug.print("{}\n", .{std.fmt.fmtSliceHexLower(list.items[0..])});
-    try testing.expect(std.mem.eql(u8, list.items[0..], expected8x58[0..]));
+    const src16x1K = [_]u16{0xabcd} ** 1024;
+    try serialize(@TypeOf(src16x1K), src16x1K, &list);
+    const expected16x1K = [_]u8{ 0xb9, 0, 0x0C } ++ [_]u8{ 130, 0xab, 0xcd } ** 1024;
+    try testing.expect(std.mem.eql(u8, list.items[0..], expected16x1K[0..]));
 }
