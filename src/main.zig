@@ -59,6 +59,28 @@ fn serialize(comptime T: type, data: T, list: *ArrayList(u8)) !void {
                 _ = try list.writer().write(tlist.items);
             }
         },
+        .Struct => |sinfo| {
+            var tlist = ArrayList(u8).init(testing.allocator);
+            defer tlist.deinit();
+            inline for (sinfo.fields) |field| {
+                try serialize(field.field_type, @field(data, field.name), &tlist);
+            }
+            if (tlist.items.len < 56) {
+                try list.append(192 + @truncate(u8, tlist.items.len));
+            } else {
+                const index = list.items.len;
+                try list.append(0);
+                var length = tlist.items.len;
+                var length_length: u8 = 0;
+                while (length != 0) : (length >>= 8) {
+                    try list.append(@truncate(u8, length));
+                    length_length += 1;
+                }
+
+                list.items[index] = 183 + length_length;
+            }
+            _ = try list.writer().write(tlist.items);
+        },
         .Pointer => |ptr| {
             switch (ptr.size) {
                 .Slice => {
@@ -175,5 +197,18 @@ test "serialize a string" {
     defer list.deinit();
     try serialize([]const u8, "hello", &list);
     const expected = [_]u8{ 133, 'h', 'e', 'l', 'l', 'o' };
+    try testing.expect(std.mem.eql(u8, list.items[0..], expected[0..]));
+}
+
+test "serialize a struct" {
+    var list = ArrayList(u8).init(testing.allocator);
+    defer list.deinit();
+    const Person = struct {
+        age: u8,
+        name: []const u8,
+    };
+    const jc = Person{ .age = 123, .name = "Jeanne Calment" };
+    try serialize(Person, jc, &list);
+    const expected = [_]u8{ 0xc2 + jc.name.len, 123, 128 + jc.name.len } ++ jc.name;
     try testing.expect(std.mem.eql(u8, list.items[0..], expected[0..]));
 }
