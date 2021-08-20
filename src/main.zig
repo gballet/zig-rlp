@@ -90,6 +90,9 @@ fn serialize(comptime T: type, data: T, list: *ArrayList(u8)) !void {
                         _ = try list.writer().write(tlist.items);
                     }
                 },
+                .One => {
+                    try serialize(ptr.child, data.*, list);
+                },
                 else => return error.UnsupportedType,
             }
         },
