@@ -46,7 +46,7 @@ fn serialize(comptime T: type, data: T, list: *ArrayList(u8)) !void {
                     try list.append(128 + @truncate(u8, tlist.items.len));
                 } else {
                     const index = list.items.len;
-                    try list.append(10);
+                    try list.append(0);
                     var length = tlist.items.len;
                     var length_length: u8 = 0;
                     while (length != 0) : (length >>= 8) {
@@ -57,6 +57,40 @@ fn serialize(comptime T: type, data: T, list: *ArrayList(u8)) !void {
                     list.items[index] = 183 + length_length;
                 }
                 _ = try list.writer().write(tlist.items);
+            }
+        },
+        .Pointer => |ptr| {
+            switch (ptr.size) {
+                .Slice => {
+                    // Simple case: string
+                    if (@sizeOf(ptr.child) == 1) {
+                        try list.append(128 + @truncate(u8, data.len));
+                        _ = try list.writer().write(data);
+                    } else {
+                        var tlist = ArrayList(u8).init(testing.allocator);
+                        defer tlist.deinit();
+                        for (data) |item| {
+                            try serialize(ptr.child, item, &tlist);
+                        }
+
+                        if (tlist.items.len < 56) {
+                            try list.append(192 + @truncate(u8, tlist.items.len));
+                        } else {
+                            const index = list.items.len;
+                            try list.append(0);
+                            var length = tlist.items.len;
+                            var length_length: u8 = 0;
+                            while (length != 0) : (length >>= 8) {
+                                try list.append(@truncate(u8, length));
+                                length_length += 1;
+                            }
+
+                            list.items[index] = 183 + length_length;
+                        }
+                        _ = try list.writer().write(tlist.items);
+                    }
+                },
+                else => return error.UnsupportedType,
             }
         },
         else => return error.UnsupportedType,
@@ -131,4 +165,12 @@ test "serialize a u16 array" {
     try serialize(@TypeOf(src16x1K), src16x1K, &list);
     const expected16x1K = [_]u8{ 0xb9, 0, 0x0C } ++ [_]u8{ 130, 0xab, 0xcd } ** 1024;
     try testing.expect(std.mem.eql(u8, list.items[0..], expected16x1K[0..]));
+}
+
+test "serialize a string" {
+    var list = ArrayList(u8).init(testing.allocator);
+    defer list.deinit();
+    try serialize([]const u8, "hello", &list);
+    const expected = [_]u8{ 133, 'h', 'e', 'l', 'l', 'o' };
+    try testing.expect(std.mem.eql(u8, list.items[0..], expected[0..]));
 }
