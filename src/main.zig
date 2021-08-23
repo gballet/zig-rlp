@@ -118,6 +118,9 @@ fn serialize(comptime T: type, data: T, list: *ArrayList(u8)) !void {
                 else => return error.UnsupportedType,
             }
         },
+        .Bool => {
+            try list.append(if (data) 1 else 0);
+        },
         else => return error.UnsupportedType,
     };
 }
@@ -210,5 +213,17 @@ test "serialize a struct" {
     const jc = Person{ .age = 123, .name = "Jeanne Calment" };
     try serialize(Person, jc, &list);
     const expected = [_]u8{ 0xc2 + jc.name.len, 123, 128 + jc.name.len } ++ jc.name;
+}
+
+test "serialize a boolean" {
+    var list = ArrayList(u8).init(testing.allocator);
+    defer list.deinit();
+    try serialize(bool, false, &list);
+    var expected = [_]u8{0};
+    try testing.expect(std.mem.eql(u8, list.items[0..], expected[0..]));
+
+    list.clearRetainingCapacity();
+    expected[0] = 1;
+    try serialize(bool, true, &list);
     try testing.expect(std.mem.eql(u8, list.items[0..], expected[0..]));
 }
