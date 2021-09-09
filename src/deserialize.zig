@@ -3,6 +3,9 @@ const expect = std.testing.expect;
 const eql = std.mem.eql;
 const readIntSliceBig = std.mem.readIntSliceBig;
 
+const rlpByteListShortHeader = 128;
+const rlpByteListLongHeader = 183;
+
 // When reading the payload, leading zeros are removed, so there might be a
 // difference in byte-size between the number of bytes and the target integer.
 // If so, the bytes have to be extracted into a temporary value.
@@ -28,11 +31,11 @@ pub fn deserialize(comptime T: type, serialized: []const u8, out: *T) !void {
     const info = @typeInfo(T);
     return switch (info) {
         .Int => {
-            if (serialized[0] < 0x80) {
+            if (serialized[0] < rlpByteListShortHeader) {
                 out.* = serialized[0];
-            } else if (serialized[0] < 0xb7) {
+            } else if (serialized[0] < rlpByteListLongHeader) {
                 // Recover the payload size from the header.
-                const size = @as(usize, serialized[0] - 0x80);
+                const size = @as(usize, serialized[0] - rlpByteListShortHeader);
 
                 // Special case: empty value, return 0
                 if (size == 0) {
@@ -44,7 +47,7 @@ pub fn deserialize(comptime T: type, serialized: []const u8, out: *T) !void {
                 }
                 safeReadSliceIntBig(T, serialized[1 .. 1 + size], out);
             } else {
-                const size_size = @as(usize, serialized[0] - 0xb7);
+                const size_size = @as(usize, serialized[0] - rlpByteListLongHeader);
                 const size = readIntSliceBig(usize, serialized[1 .. 1 + size_size]);
                 safeReadSliceIntBig(T, serialized[1 + size_size ..], out);
             }
