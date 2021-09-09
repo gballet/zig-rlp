@@ -2,7 +2,7 @@ const std = @import("std");
 const testing = std.testing;
 const ArrayList = std.ArrayList;
 
-fn serialize(comptime T: type, data: T, list: *ArrayList(u8)) !void {
+pub fn serialize(comptime T: type, data: T, list: *ArrayList(u8)) !void {
     const info = @typeInfo(T);
     return switch (info) {
         .Int => switch (data) {
