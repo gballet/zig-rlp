@@ -78,6 +78,24 @@ pub fn deserialize(comptime T: type, serialized: []const u8, out: *T) !usize {
 
             return offset;
         },
+        .Pointer => |ptr| switch (ptr.size) {
+            .Slice => if (ptr.child == u8) {
+                if (serialized[0] < rlpByteListShortHeader) {
+                    out.* = serialized[0..1];
+                    return 1;
+                } else if (serialized[0] < rlpByteListLongHeader) {
+                    const size = @as(usize, serialized[0] - rlpByteListShortHeader);
+                    out.* = serialized[1 .. 1 + size];
+                    return 1 + size;
+                } else {
+                    const size_size = @as(usize, serialized[0] - rlpByteListLongHeader);
+                    const size = readIntSliceBig(usize, serialized[1 .. 1 + size_size]);
+                    out.* = serialized[1 + size_size .. 1 + size_size + size];
+                    return 1 + size + size_size;
+                }
+            } else return error.UnSupportedType,
+            else => return error.UnSupportedType,
+        },
         else => return error.UnsupportedType,
     };
 }
@@ -113,8 +131,9 @@ test "deserialize an integer" {
 test "deserialize a structure" {
     const Person = struct {
         age: u8,
+        name: []const u8,
     };
-    const jc = Person{ .age = 123 };
+    const jc = Person{ .age = 123, .name = "Jeanne Calment" };
     var list = ArrayList(u8).init(std.testing.allocator);
     defer list.deinit();
     try serialize(Person, jc, &list);
@@ -122,4 +141,15 @@ test "deserialize a structure" {
     const consumed = try deserialize(Person, list.items[0..], &p);
     try expect(consumed == list.items.len);
     try expect(p.age == jc.age);
+    try expect(eql(u8, p.name, jc.name));
+}
+test "deserialize a string" {
+    const str = "abc";
+    var list = ArrayList(u8).init(std.testing.allocator);
+    defer list.deinit();
+    try serialize([]const u8, str, &list);
+    var s: []const u8 = undefined;
+    const consumed = try deserialize([]const u8, list.items[0..], &s);
+    try expect(eql(u8, str, s));
+    try expect(consumed == list.items.len);
 }
