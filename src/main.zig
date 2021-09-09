@@ -118,6 +118,9 @@ pub fn serialize(comptime T: type, data: T, list: *ArrayList(u8)) !void {
                 else => return error.UnsupportedType,
             }
         },
+        .Null => {
+            try list.append(0x80);
+        },
         .Bool => {
             try list.append(if (data) 1 else 0);
         },
