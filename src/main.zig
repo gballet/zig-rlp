@@ -1,6 +1,7 @@
 const std = @import("std");
 const testing = std.testing;
 const ArrayList = std.ArrayList;
+pub const deserialize = @import("deserialize").deserialize;
 
 pub fn serialize(comptime T: type, data: T, list: *ArrayList(u8)) !void {
     const info = @typeInfo(T);
