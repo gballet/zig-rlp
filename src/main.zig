@@ -219,6 +219,23 @@ test "serialize a struct" {
     const expected = [_]u8{ 0xc2 + jc.name.len, 123, 128 + jc.name.len } ++ jc.name;
 }
 
+test "serialize a struct with functions" {
+    var list = ArrayList(u8).init(testing.allocator);
+    defer list.deinit();
+    const Person = struct {
+        age: u8,
+        name: []const u8,
+
+        pub fn sayHello() void {
+            std.debug.print("hello", .{});
+        }
+    };
+    const jc = Person{ .age = 123, .name = "Jeanne Calment" };
+    try serialize(Person, jc, &list);
+    const expected = [_]u8{ 0xc2 + jc.name.len, 123, 128 + jc.name.len } ++ jc.name;
+    try testing.expect(std.mem.eql(u8, list.items[0..], expected[0..]));
+}
+
 test "serialize a boolean" {
     var list = ArrayList(u8).init(testing.allocator);
     defer list.deinit();
