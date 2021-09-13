@@ -4,6 +4,9 @@ const expect = std.testing.expect;
 const eql = std.mem.eql;
 const readIntSliceBig = std.mem.readIntSliceBig;
 const ArrayList = std.ArrayList;
+const hasFn = std.meta.trait.hasFn;
+
+const implementsDecodeRLP = hasFn("decodeRLP");
 
 const rlpByteListShortHeader = 128;
 const rlpByteListLongHeader = 183;
@@ -33,6 +36,9 @@ inline fn safeReadSliceIntBig(comptime T: type, payload: []const u8, out: *T) vo
 
 // Returns the amount of data consumed from `serialized`.
 pub fn deserialize(comptime T: type, serialized: []const u8, out: *T) !usize {
+    if (comptime implementsDecodeRLP(T)) {
+        return out.decodeRLP(serialized);
+    }
     const info = @typeInfo(T);
     return switch (info) {
         .Int => {
@@ -152,4 +158,27 @@ test "deserialize a string" {
     const consumed = try deserialize([]const u8, list.items[0..], &s);
     try expect(eql(u8, str, s));
     try expect(consumed == list.items.len);
+}
+
+const RLPDecodablePerson = struct {
+    name: []const u8,
+    age: u8,
+
+    pub fn decodeRLP(self: *RLPDecodablePerson, serialized: []const u8) !usize {
+        if (serialized.len == 0) {
+            return error.EOF;
+        }
+
+        self.age = serialized[0];
+        self.name = "freshly deserialized person";
+        return 1;
+    }
+};
+
+test "deserialize with custom serializer" {
+    var person: RLPDecodablePerson = undefined;
+    const serialized = [_]u8{42};
+    const consumed = try deserialize(RLPDecodablePerson, serialized[0..], &person);
+    try expect(person.age == serialized[0]);
+    try expect(consumed == 1);
 }
