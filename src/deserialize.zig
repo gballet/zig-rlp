@@ -111,7 +111,7 @@ pub fn deserialize(comptime T: type, serialized: []const u8, out: *T) !usize {
                 if (size != out.len) {
                     return error.InvalidArrayLength;
                 }
-                std.mem.copy(out.*, serialized[1 .. 1 + size]);
+                std.mem.copy(u8, out.*[0..], serialized[1 .. 1 + size]);
                 return 1 + size;
             } else {
                 const size_size = @as(usize, serialized[0] - rlpByteListLongHeader);
@@ -119,7 +119,7 @@ pub fn deserialize(comptime T: type, serialized: []const u8, out: *T) !usize {
                 if (size != out.len) {
                     return error.InvalidArrayLength;
                 }
-                std.mem.copy(out.*, serialized[1 + size_size .. 1 + size_size + size]);
+                std.mem.copy(u8, out.*[0..], serialized[1 + size_size .. 1 + size_size + size]);
                 return 1 + size + size_size;
             }
         } else return error.UnsupportedType,
@@ -186,8 +186,8 @@ test "deserialize a byte array" {
     var list = ArrayList(u8).init(std.testing.allocator);
     defer list.deinit();
     try serialize(@TypeOf(expected), expected, &list);
-    var out: []const u8 = undefined;
-    const consumed = try deserialize([]const u8, list.items[0..], &out);
+    var out: [3]u8 = undefined;
+    const consumed = try deserialize([3]u8, list.items[0..], &out);
     try expect(eql(u8, expected[0..], out[0..]));
     try expect(consumed == list.items.len);
 }
