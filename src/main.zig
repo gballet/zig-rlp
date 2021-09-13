@@ -2,8 +2,14 @@ const std = @import("std");
 const testing = std.testing;
 const ArrayList = std.ArrayList;
 pub const deserialize = @import("deserialize.zig").deserialize;
+const hasFn = std.meta.trait.hasFn;
+
+const implementsRLP = hasFn("encodeToRLP");
 
 pub fn serialize(comptime T: type, data: T, list: *ArrayList(u8)) !void {
+    if (comptime implementsRLP(T)) {
+        return data.encodeToRLP(list);
+    }
     const info = @typeInfo(T);
     return switch (info) {
         .Int => switch (data) {
@@ -247,4 +253,22 @@ test "serialize a boolean" {
     expected[0] = 1;
     try serialize(bool, true, &list);
     try testing.expect(std.mem.eql(u8, list.items[0..], expected[0..]));
+}
+
+const RLPEncodablePerson = struct {
+    name: []const u8,
+    age: u8,
+
+    pub fn encodeToRLP(self: RLPEncodablePerson, list: *ArrayList(u8)) !void {
+        return list.append(42);
+    }
+};
+
+test "custom serializer" {
+    var list = ArrayList(u8).init(testing.allocator);
+    defer list.deinit();
+    const jdoe = RLPEncodablePerson{ .name = "John Doe", .age = 57 };
+    try serialize(RLPEncodablePerson, jdoe, &list);
+    try testing.expect(list.items.len == 1);
+    try testing.expect(list.items[0] == 42);
 }
