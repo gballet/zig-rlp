@@ -102,6 +102,27 @@ pub fn deserialize(comptime T: type, serialized: []const u8, out: *T) !usize {
             } else return error.UnSupportedType,
             else => return error.UnSupportedType,
         },
+        .Array => |ary| if (@sizeOf(ary.child) == 1) {
+            if (serialized[0] < rlpByteListShortHeader) {
+                out.*[0] = serialized[0];
+                return 1;
+            } else if (serialized[0] < rlpByteListLongHeader) {
+                const size = @as(usize, serialized[0] - rlpByteListShortHeader);
+                if (size != out.len) {
+                    return error.InvalidArrayLength;
+                }
+                std.mem.copy(out.*, serialized[1 .. 1 + size]);
+                return 1 + size;
+            } else {
+                const size_size = @as(usize, serialized[0] - rlpByteListLongHeader);
+                const size = readIntSliceBig(usize, serialized[1 .. 1 + size_size]);
+                if (size != out.len) {
+                    return error.InvalidArrayLength;
+                }
+                std.mem.copy(out.*, serialized[1 + size_size .. 1 + size_size + size]);
+                return 1 + size + size_size;
+            }
+        } else return error.UnsupportedType,
         else => return error.UnsupportedType,
     };
 }
@@ -157,6 +178,17 @@ test "deserialize a string" {
     var s: []const u8 = undefined;
     const consumed = try deserialize([]const u8, list.items[0..], &s);
     try expect(eql(u8, str, s));
+    try expect(consumed == list.items.len);
+}
+
+test "deserialize a byte array" {
+    const expected = [_]u8{ 1, 2, 3 };
+    var list = ArrayList(u8).init(std.testing.allocator);
+    defer list.deinit();
+    try serialize(@TypeOf(expected), expected, &list);
+    var out: []const u8 = undefined;
+    const consumed = try deserialize([]const u8, list.items[0..], &out);
+    try expect(eql(u8, expected[0..], out[0..]));
     try expect(consumed == list.items.len);
 }
 
