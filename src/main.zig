@@ -125,6 +125,13 @@ pub fn serialize(comptime T: type, data: T, list: *ArrayList(u8)) !void {
                 else => return error.UnsupportedType,
             }
         },
+        .Optional => |opt| {
+            if (data == null) {
+                try list.append(0x80);
+            } else {
+                try serialize(opt.child, data.?, list);
+            }
+        },
         .Null => {
             try list.append(0x80);
         },

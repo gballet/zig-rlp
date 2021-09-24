@@ -123,6 +123,17 @@ pub fn deserialize(comptime T: type, serialized: []const u8, out: *T) !usize {
                 return 1 + size + size_size;
             }
         } else return error.UnsupportedType,
+        .Optional => |opt| {
+            if (serialized[0] == 0x80) {
+                out.* = null;
+                return 1;
+            } else {
+                var t: opt.child = undefined;
+                const offset = try deserialize(opt.child, serialized[0..], &t);
+                out.* = t;
+                return offset;
+            }
+        },
         else => return error.UnsupportedType,
     };
 }
@@ -213,4 +224,22 @@ test "deserialize with custom serializer" {
     const consumed = try deserialize(RLPDecodablePerson, serialized[0..], &person);
     try expect(person.age == serialized[0]);
     try expect(consumed == 1);
+}
+
+test "deserialize an optional" {
+    var list = ArrayList(u8).init(std.testing.allocator);
+    defer list.deinit();
+    var x: ?u32 = null;
+
+    try serialize(?u32, x, &list);
+    var y: ?u32 = undefined;
+    _ = try deserialize(?u32, list.items, &y);
+    try expect(y == null);
+
+    list.clearAndFree();
+    x = 32;
+    var z: ?u32 = undefined;
+    try serialize(?u32, x, &list);
+    _ = try deserialize(?u32, list.items, &z);
+    try expect(z.? == x.?);
 }
