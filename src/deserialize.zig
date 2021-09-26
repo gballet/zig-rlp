@@ -108,9 +108,11 @@ pub fn deserialize(comptime T: type, serialized: []const u8, out: *T) !usize {
                 return 1;
             } else if (serialized[0] < rlpByteListLongHeader) {
                 const size = @as(usize, serialized[0] - rlpByteListShortHeader);
-                if (size != out.len) {
+                // The target might be larger than the payload, as 0s are not
+                // stored in the RLP encoding.
+                if (size > out.len)
                     return error.InvalidArrayLength;
-                }
+
                 std.mem.copy(u8, out.*[0..], serialized[1 .. 1 + size]);
                 return 1 + size;
             } else {
