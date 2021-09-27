@@ -99,7 +99,26 @@ pub fn deserialize(comptime T: type, serialized: []const u8, out: *T) !usize {
                     out.* = serialized[1 + size_size .. 1 + size_size + size];
                     return 1 + size + size_size;
                 }
-            } else return error.UnSupportedType,
+            } else {
+                if (serialized[0] < rlpByteListShortHeader) {
+                    return try deserialize(ptr.child, serialized[0..1], &out.*[0]);
+                } else if (serialized[0] < rlpByteListLongHeader) {
+                    const size = @as(usize, serialized[0] - rlpByteListShortHeader);
+                    var i: usize = 0;
+                    while (i < size) : (i += 1) {
+                        i += try deserialize(ptr.child, serialized[1 + i ..], &out.*[i]);
+                    }
+                    return 1 + size;
+                } else {
+                    const size_size = @as(usize, serialized[0] - rlpByteListLongHeader);
+                    var size = readIntSliceBig(usize, serialized[1..]) / std.math.pow(usize, 256, 8 - size_size);
+                    var i: usize = 0;
+                    while (i + 1 < size) : (i += 1) {
+                        i += try deserialize(ptr.child, serialized[1 + size_size + i ..], &out.*[i]);
+                    }
+                    return 1 + size + size_size;
+                }
+            },
             else => return error.UnSupportedType,
         },
         .Array => |ary| if (@sizeOf(ary.child) == 1) {
