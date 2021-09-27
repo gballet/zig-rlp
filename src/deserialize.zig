@@ -75,9 +75,15 @@ pub fn deserialize(comptime T: type, serialized: []const u8, out: *T) !usize {
             if (serialized[0] < rlpListShortHeader) {
                 return error.NotAnRLPList;
             }
-            // TODO also handle bigger payloads
-            const size = @as(usize, serialized[0] - rlpListShortHeader);
-            var offset: usize = 1; // TODO + size_size
+            var size: usize = undefined;
+            var offset: usize = 1;
+            if (serialized[0] < rlpListLongHeader) {
+                size = @as(usize, serialized[0] - rlpListShortHeader);
+            } else {
+                const size_size = @as(usize, serialized[0] - rlpListLongHeader);
+                offset += size_size;
+                size = readIntSliceBig(usize, serialized[1..]) / std.math.pow(usize, 256, 8 - size_size);
+            }
             inline for (struc.fields) |field| {
                 offset += try deserialize(field.field_type, serialized[offset..], &@field(out.*, field.name));
             }
