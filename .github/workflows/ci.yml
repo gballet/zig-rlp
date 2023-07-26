@@ -18,6 +18,9 @@ jobs:
       with:
         zig-version: master
 
+    - name: Display zig compiler version
+      run:  zig version
+
     - name: Build
       run: zig build
 
