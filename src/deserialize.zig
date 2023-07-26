@@ -85,7 +85,7 @@ pub fn deserialize(comptime T: type, serialized: []const u8, out: *T) !usize {
                 size = readIntSliceBig(usize, serialized[1..]) / std.math.pow(usize, 256, 8 - size_size);
             }
             inline for (struc.fields) |field| {
-                offset += try deserialize(field.field_type, serialized[offset..], &@field(out.*, field.name));
+                offset += try deserialize(field.type, serialized[offset..], &@field(out.*, field.name));
             }
 
             return offset;
@@ -142,7 +142,9 @@ pub fn deserialize(comptime T: type, serialized: []const u8, out: *T) !usize {
                 return 1 + size;
             } else {
                 const size_size = @as(usize, serialized[0] - rlpByteListLongHeader);
-                const size = readIntSliceBig(usize, serialized[1 .. 1 + size_size]);
+                var padded_bytes: [8]u8 = [_]u8{0} ** 8;
+                @memcpy(padded_bytes[8 - size_size ..], serialized[1 .. 1 + size_size]);
+                const size = readIntSliceBig(usize, &padded_bytes);
                 if (size != out.len) {
                     return error.InvalidArrayLength;
                 }

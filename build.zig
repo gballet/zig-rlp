@@ -1,15 +1,26 @@
 const Builder = @import("std").build.Builder;
 
 pub fn build(b: *Builder) void {
-    const mode = b.standardReleaseOptions();
-    const lib = b.addStaticLibrary("zig-rlp", "src/main.zig");
-    lib.setBuildMode(mode);
-    lib.install();
+    const target = b.standardTargetOptions(.{});
+    const optimize = b.standardOptimizeOption(.{});
+    const lib = b.addStaticLibrary(.{
+        .name = "zig-rlp",
+        .root_source_file = .{ .path = "src/main.zig" },
+        .target = target,
+        .optimize = optimize,
+    });
+    b.installArtifact(lib);
 
-    var main_tests = b.addTest("src/main.zig");
-    main_tests.setBuildMode(mode);
-    var deser_tests = b.addTest("src/deserialize.zig");
-    deser_tests.setBuildMode(mode);
+    var main_tests = b.addTest(.{
+        .root_source_file = .{ .path = "src/main.zig" },
+        .target = target,
+        .optimize = optimize,
+    });
+    var deser_tests = b.addTest(.{
+        .root_source_file = .{ .path = "src/deserialize.zig" },
+        .target = target,
+        .optimize = optimize,
+    });
 
     const test_step = b.step("test", "Run library tests");
     test_step.dependOn(&main_tests.step);

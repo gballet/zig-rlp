@@ -13,7 +13,7 @@ pub fn serialize(comptime T: type, data: T, list: *ArrayList(u8)) !void {
     const info = @typeInfo(T);
     return switch (info) {
         .Int => switch (data) {
-            0...127 => list.append(@truncate(u8, data)),
+            0...127 => list.append(@truncate(data)),
 
             else => {
                 try list.append(128 + @sizeOf(T));
@@ -37,7 +37,7 @@ pub fn serialize(comptime T: type, data: T, list: *ArrayList(u8)) !void {
                     comptime var i = 0;
                     comptime var length = @sizeOf(T);
                     inline while (i < length_length) : (i += 1) {
-                        try list.append(@truncate(u8, length));
+                        try list.append(@as(u8, @truncate(length)));
                         length >>= 8;
                     }
                 }
@@ -50,14 +50,14 @@ pub fn serialize(comptime T: type, data: T, list: *ArrayList(u8)) !void {
                 }
 
                 if (tlist.items.len < 56) {
-                    try list.append(128 + @truncate(u8, tlist.items.len));
+                    try list.append(128 + @as(u8, @truncate(tlist.items.len)));
                 } else {
                     const index = list.items.len;
                     try list.append(0);
                     var length = tlist.items.len;
                     var length_length: u8 = 0;
                     while (length != 0) : (length >>= 8) {
-                        try list.append(@truncate(u8, length));
+                        try list.append(@as(u8, @truncate(length)));
                         length_length += 1;
                     }
 
@@ -70,17 +70,17 @@ pub fn serialize(comptime T: type, data: T, list: *ArrayList(u8)) !void {
             var tlist = ArrayList(u8).init(testing.allocator);
             defer tlist.deinit();
             inline for (sinfo.fields) |field| {
-                try serialize(field.field_type, @field(data, field.name), &tlist);
+                try serialize(field.type, @field(data, field.name), &tlist);
             }
             if (tlist.items.len < 56) {
-                try list.append(192 + @truncate(u8, tlist.items.len));
+                try list.append(192 + @as(u8, @truncate(tlist.items.len)));
             } else {
                 const index = list.items.len;
                 try list.append(0);
                 var length = tlist.items.len;
                 var length_length: u8 = 0;
                 while (length != 0) : (length >>= 8) {
-                    try list.append(@truncate(u8, length));
+                    try list.append(@as(u8, @truncate(length)));
                     length_length += 1;
                 }
 
@@ -93,7 +93,7 @@ pub fn serialize(comptime T: type, data: T, list: *ArrayList(u8)) !void {
                 .Slice => {
                     // Simple case: string
                     if (@sizeOf(ptr.child) == 1) {
-                        try list.append(128 + @truncate(u8, data.len));
+                        try list.append(128 + @as(u8, @truncate(data.len)));
                         _ = try list.writer().write(data);
                     } else {
                         var tlist = ArrayList(u8).init(testing.allocator);
@@ -103,14 +103,14 @@ pub fn serialize(comptime T: type, data: T, list: *ArrayList(u8)) !void {
                         }
 
                         if (tlist.items.len < 56) {
-                            try list.append(192 + @truncate(u8, tlist.items.len));
+                            try list.append(192 + @as(u8, @truncate(tlist.items.len)));
                         } else {
                             const index = list.items.len;
                             try list.append(0);
                             var length = tlist.items.len;
                             var length_length: u8 = 0;
                             while (length != 0) : (length >>= 8) {
-                                try list.append(@truncate(u8, length));
+                                try list.append(@as(u8, @truncate(length)));
                                 length_length += 1;
                             }
 
@@ -268,6 +268,7 @@ const RLPEncodablePerson = struct {
     age: u8,
 
     pub fn encodeToRLP(self: RLPEncodablePerson, list: *ArrayList(u8)) !void {
+        _ = self;
         return list.append(42);
     }
 };
