@@ -4,7 +4,7 @@ pub fn build(b: *Builder) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    _ = b.addModule("zig-rlp", Builder.CreateModuleOptions{ .source_file = .{ .path = "src/main.zig" } });
+    _ = b.addModule("rlp", Builder.CreateModuleOptions{ .source_file = .{ .path = "src/main.zig" } });
 
     const lib = b.addStaticLibrary(.{
         .name = "zig-rlp",
