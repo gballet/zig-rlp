@@ -3,6 +3,9 @@ const Builder = @import("std").build.Builder;
 pub fn build(b: *Builder) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+
+    _ = b.addModule("rlp", Builder.CreateModuleOptions{ .source_file = .{ .path = "src/main.zig" } });
+
     const lib = b.addStaticLibrary(.{
         .name = "zig-rlp",
         .root_source_file = .{ .path = "src/main.zig" },
