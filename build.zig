@@ -14,16 +14,16 @@ pub fn build(b: *Builder) void {
     });
     b.installArtifact(lib);
 
-    var main_tests = b.addTest(.{
+    var main_tests = b.addRunArtifact(b.addTest(.{
         .root_source_file = .{ .path = "src/main.zig" },
         .target = target,
         .optimize = optimize,
-    });
-    var deser_tests = b.addTest(.{
+    }));
+    var deser_tests = b.addRunArtifact(b.addTest(.{
         .root_source_file = .{ .path = "src/deserialize.zig" },
         .target = target,
         .optimize = optimize,
-    });
+    }));
 
     const test_step = b.step("test", "Run library tests");
     test_step.dependOn(&main_tests.step);
