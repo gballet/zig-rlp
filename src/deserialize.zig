@@ -153,6 +153,25 @@ pub fn deserialize(comptime T: type, serialized: []const u8, out: *T) !usize {
             }
         } else return error.UnsupportedType,
         .Optional => |opt| {
+            // There are two types of optional: those in the
+            // middle of a structure, that MUST be represented
+            // by an empty field (0x80) and those who are at
+            // the end of a structure and are missing entirely
+            // (typical case: block structures being extended
+            // fork after fork). In this latter case, the size
+            // of the payload will be shorter than the number
+            // of fields, and so this special case needs to
+            // be caught here.
+            if (serialized.len == 0) {
+                out.* = null;
+                // return 0 so that the above condition is true
+                // for multiple optional, missing fields.
+                return 0;
+            }
+
+            // general case: a field in the middle of a structure
+            // represented by either an empty value 0x80 or a full
+            // byte payload.
             if (serialized[0] == 0x80) {
                 out.* = null;
                 return 1;
