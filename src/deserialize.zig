@@ -291,3 +291,20 @@ test "deserialize an optional" {
     _ = try deserialize(?u32, list.items, &z);
     try expect(z.? == x.?);
 }
+
+test "deserialize a structure with missing optional fields at the end" {
+    const structWithTrailingOptionalFields = struct {
+        x: u64,
+        y: ?u64,
+        z: ?u64,
+        alpha: ?[]const u8,
+    };
+    const serialized = [_]u8{ 0xc6, 0x84, 0xde, 0xad, 0xbe, 0xef, 5 };
+
+    var mystruct: structWithTrailingOptionalFields = undefined;
+    _ = try deserialize(structWithTrailingOptionalFields, serialized[0..], &mystruct);
+    try expect(mystruct.x == 0xdeadbeef);
+    try expect(mystruct.y != null and mystruct.y.? == 5);
+    try expect(mystruct.z == null);
+    try expect(mystruct.alpha == null);
+}
