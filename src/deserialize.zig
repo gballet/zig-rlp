@@ -236,7 +236,7 @@ test "deserialize a structure" {
     const jc = Person{ .age = 123, .name = "Jeanne Calment" };
     var list = ArrayList(u8).init(std.testing.allocator);
     defer list.deinit();
-    try serialize(Person, jc, &list);
+    try serialize(Person, std.testing.allocator, jc, &list);
     var p: Person = undefined;
     const consumed = try deserialize(Person, list.items[0..], &p);
     try expect(consumed == list.items.len);
@@ -247,7 +247,7 @@ test "deserialize a string" {
     const str = "abc";
     var list = ArrayList(u8).init(std.testing.allocator);
     defer list.deinit();
-    try serialize([]const u8, str, &list);
+    try serialize([]const u8, std.testing.allocator, str, &list);
     var s: []const u8 = undefined;
     const consumed = try deserialize([]const u8, list.items[0..], &s);
     try expect(eql(u8, str, s));
@@ -258,7 +258,7 @@ test "deserialize a byte array" {
     const expected = [_]u8{ 1, 2, 3 };
     var list = ArrayList(u8).init(std.testing.allocator);
     defer list.deinit();
-    try serialize(@TypeOf(expected), expected, &list);
+    try serialize(@TypeOf(expected), std.testing.allocator, expected, &list);
     var out: [3]u8 = undefined;
     const consumed = try deserialize([3]u8, list.items[0..], &out);
     try expect(eql(u8, expected[0..], out[0..]));
@@ -293,7 +293,7 @@ test "deserialize an optional" {
     defer list.deinit();
     var x: ?u32 = null;
 
-    try serialize(?u32, x, &list);
+    try serialize(?u32, std.testing.allocator, x, &list);
     var y: ?u32 = undefined;
     _ = try deserialize(?u32, list.items, &y);
     try expect(y == null);
@@ -301,7 +301,7 @@ test "deserialize an optional" {
     list.clearAndFree();
     x = 32;
     var z: ?u32 = undefined;
-    try serialize(?u32, x, &list);
+    try serialize(?u32, std.testing.allocator, x, &list);
     _ = try deserialize(?u32, list.items, &z);
     try expect(z.? == x.?);
 }
