@@ -1,12 +1,13 @@
 const std = @import("std");
 const testing = std.testing;
 const ArrayList = std.ArrayList;
+const Allocator = std.mem.Allocator;
 pub const deserialize = @import("deserialize.zig").deserialize;
 const hasFn = std.meta.trait.hasFn;
 
 const implementsRLP = hasFn("encodeToRLP");
 
-pub fn serialize(comptime T: type, data: T, list: *ArrayList(u8)) !void {
+pub fn serialize(comptime T: type, allocator: Allocator, data: T, list: *ArrayList(u8)) !void {
     if (comptime implementsRLP(T)) {
         return data.encodeToRLP(list);
     }
@@ -43,10 +44,10 @@ pub fn serialize(comptime T: type, data: T, list: *ArrayList(u8)) !void {
                 }
                 _ = try list.writer().write(data[0..]);
             } else {
-                var tlist = ArrayList(u8).init(testing.allocator);
+                var tlist = ArrayList(u8).init(allocator);
                 defer tlist.deinit();
                 for (data) |item| {
-                    try serialize(info.Array.child, item, &tlist);
+                    try serialize(info.Array.child, allocator, item, &tlist);
                 }
 
                 if (tlist.items.len < 56) {
@@ -67,10 +68,10 @@ pub fn serialize(comptime T: type, data: T, list: *ArrayList(u8)) !void {
             }
         },
         .Struct => |sinfo| {
-            var tlist = ArrayList(u8).init(testing.allocator);
+            var tlist = ArrayList(u8).init(allocator);
             defer tlist.deinit();
             inline for (sinfo.fields) |field| {
-                try serialize(field.type, @field(data, field.name), &tlist);
+                try serialize(field.type, allocator, @field(data, field.name), &tlist);
             }
             if (tlist.items.len < 56) {
                 try list.append(192 + @as(u8, @truncate(tlist.items.len)));
@@ -96,7 +97,7 @@ pub fn serialize(comptime T: type, data: T, list: *ArrayList(u8)) !void {
                         try list.append(128 + @as(u8, @truncate(data.len)));
                         _ = try list.writer().write(data);
                     } else {
-                        var tlist = ArrayList(u8).init(testing.allocator);
+                        var tlist = ArrayList(u8).init(allocator);
                         defer tlist.deinit();
                         for (data) |item| {
                             try serialize(ptr.child, item, &tlist);
@@ -129,7 +130,7 @@ pub fn serialize(comptime T: type, data: T, list: *ArrayList(u8)) !void {
             if (data == null) {
                 try list.append(0x80);
             } else {
-                try serialize(opt.child, data.?, list);
+                try serialize(opt.child, allocator, data.?, list);
             }
         },
         .Null => {
@@ -145,33 +146,33 @@ pub fn serialize(comptime T: type, data: T, list: *ArrayList(u8)) !void {
 test "serialize an integer" {
     var list = ArrayList(u8).init(testing.allocator);
     defer list.deinit();
-    try serialize(u8, 42, &list);
+    try serialize(u8, testing.allocator, 42, &list);
     const expected1 = [_]u8{42};
     try testing.expect(std.mem.eql(u8, list.items[0..], expected1[0..]));
 
     list.clearRetainingCapacity();
-    try serialize(u8, 129, &list);
+    try serialize(u8, testing.allocator, 129, &list);
     const expected2 = [_]u8{ 129, 129 };
     try testing.expect(std.mem.eql(u8, list.items[0..], expected2[0..]));
 
     list.clearRetainingCapacity();
-    try serialize(u8, 128, &list);
+    try serialize(u8, testing.allocator, 128, &list);
     const expected3 = [_]u8{ 129, 128 };
     try testing.expect(std.mem.eql(u8, list.items[0..], expected3[0..]));
 
     list.clearRetainingCapacity();
-    try serialize(u16, 0xabcd, &list);
+    try serialize(u16, testing.allocator, 0xabcd, &list);
     const expected4 = [_]u8{ 130, 0xab, 0xcd };
     try testing.expect(std.mem.eql(u8, list.items[0..], expected4[0..]));
 
     // Check that multi-byte values that are < 128 also serialize as a
     // single byte integer.
     list.clearRetainingCapacity();
-    try serialize(u16, 42, &list);
+    try serialize(u16, testing.allocator, 42, &list);
     try testing.expect(std.mem.eql(u8, list.items[0..], expected1[0..]));
 
     list.clearRetainingCapacity();
-    try serialize(u32, 0xdeadbeef, &list);
+    try serialize(u32, testing.allocator, 0xdeadbeef, &list);
     const expected6 = [_]u8{ 132, 0xde, 0xad, 0xbe, 0xef };
     try testing.expect(std.mem.eql(u8, list.items[0..], expected6[0..]));
 }
@@ -180,19 +181,19 @@ test "serialize a byte array" {
     var list = ArrayList(u8).init(testing.allocator);
     defer list.deinit();
     const src = [_]u8{ 1, 2, 3, 4 };
-    try serialize([4]u8, src, &list);
+    try serialize([4]u8, testing.allocator, src, &list);
     const expected = [_]u8{ 132, 1, 2, 3, 4 };
     try testing.expect(std.mem.eql(u8, list.items[0..], expected[0..]));
 
     list.clearRetainingCapacity();
     const src8x58 = [_]u8{0xab} ** 58;
-    try serialize([58]u8, src8x58, &list);
+    try serialize([58]u8, testing.allocator, src8x58, &list);
     const expected8x58 = [_]u8{ 0xb8, 0x3a } ++ [_]u8{0xab} ** 58;
     try testing.expect(std.mem.eql(u8, list.items[0..], expected8x58[0..]));
 
     list.clearRetainingCapacity();
     const src8x1K = [_]u8{0xab} ** 1024;
-    try serialize(@TypeOf(src8x1K), src8x1K, &list);
+    try serialize(@TypeOf(src8x1K), testing.allocator, src8x1K, &list);
     const expected8x1K = [_]u8{ 0xb9, 0x00, 0x04 } ++ [_]u8{0xab} ** 1024;
     try testing.expect(std.mem.eql(u8, list.items[0..], expected8x1K[0..]));
 }
@@ -201,13 +202,13 @@ test "serialize a u16 array" {
     var list = ArrayList(u8).init(testing.allocator);
     defer list.deinit();
     const src16 = [_]u16{ 0xabcd, 0xef01 };
-    try serialize([2]u16, src16, &list);
+    try serialize([2]u16, testing.allocator, src16, &list);
     const expected16 = [_]u8{ 134, 130, 0xab, 0xcd, 130, 0xef, 0x01 };
     try testing.expect(std.mem.eql(u8, list.items[0..], expected16[0..]));
 
     list.clearRetainingCapacity();
     const src16x1K = [_]u16{0xabcd} ** 1024;
-    try serialize(@TypeOf(src16x1K), src16x1K, &list);
+    try serialize(@TypeOf(src16x1K), testing.allocator, src16x1K, &list);
     const expected16x1K = [_]u8{ 0xb9, 0, 0x0C } ++ [_]u8{ 130, 0xab, 0xcd } ** 1024;
     try testing.expect(std.mem.eql(u8, list.items[0..], expected16x1K[0..]));
 }
@@ -215,7 +216,7 @@ test "serialize a u16 array" {
 test "serialize a string" {
     var list = ArrayList(u8).init(testing.allocator);
     defer list.deinit();
-    try serialize([]const u8, "hello", &list);
+    try serialize([]const u8, testing.allocator, "hello", &list);
     const expected = [_]u8{ 133, 'h', 'e', 'l', 'l', 'o' };
     try testing.expect(std.mem.eql(u8, list.items[0..], expected[0..]));
 }
@@ -228,7 +229,7 @@ test "serialize a struct" {
         name: []const u8,
     };
     const jc = Person{ .age = 123, .name = "Jeanne Calment" };
-    try serialize(Person, jc, &list);
+    try serialize(Person, testing.allocator, jc, &list);
     const expected = [_]u8{ 0xc2 + jc.name.len, 123, 128 + jc.name.len } ++ jc.name;
     try testing.expect(std.mem.eql(u8, list.items[0..], expected[0..]));
 }
@@ -245,7 +246,7 @@ test "serialize a struct with functions" {
         }
     };
     const jc = Person{ .age = 123, .name = "Jeanne Calment" };
-    try serialize(Person, jc, &list);
+    try serialize(Person, testing.allocator, jc, &list);
     const expected = [_]u8{ 0xc2 + jc.name.len, 123, 128 + jc.name.len } ++ jc.name;
     try testing.expect(std.mem.eql(u8, list.items[0..], expected[0..]));
 }
@@ -253,13 +254,13 @@ test "serialize a struct with functions" {
 test "serialize a boolean" {
     var list = ArrayList(u8).init(testing.allocator);
     defer list.deinit();
-    try serialize(bool, false, &list);
+    try serialize(bool, testing.allocator, false, &list);
     var expected = [_]u8{0};
     try testing.expect(std.mem.eql(u8, list.items[0..], expected[0..]));
 
     list.clearRetainingCapacity();
     expected[0] = 1;
-    try serialize(bool, true, &list);
+    try serialize(bool, testing.allocator, true, &list);
     try testing.expect(std.mem.eql(u8, list.items[0..], expected[0..]));
 }
 
@@ -277,7 +278,7 @@ test "custom serializer" {
     var list = ArrayList(u8).init(testing.allocator);
     defer list.deinit();
     const jdoe = RLPEncodablePerson{ .name = "John Doe", .age = 57 };
-    try serialize(RLPEncodablePerson, jdoe, &list);
+    try serialize(RLPEncodablePerson, testing.allocator, jdoe, &list);
     try testing.expect(list.items.len == 1);
     try testing.expect(list.items[0] == 42);
 }
