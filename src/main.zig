@@ -110,7 +110,7 @@ pub fn serialize(comptime T: type, allocator: Allocator, data: T, list: *ArrayLi
                         var tlist = ArrayList(u8).init(allocator);
                         defer tlist.deinit();
                         for (data) |item| {
-                            try serialize(ptr.child, item, &tlist);
+                            try serialize(ptr.child, allocator, item, &tlist);
                         }
 
                         if (tlist.items.len < 56) {
