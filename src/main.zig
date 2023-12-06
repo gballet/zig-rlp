@@ -85,7 +85,7 @@ pub fn serialize(comptime T: type, allocator: Allocator, data: T, list: *ArrayLi
                     length_length += 1;
                 }
 
-                list.items[index] = 183 + length_length;
+                list.items[index] = 247 + length_length;
             }
             _ = try list.writer().write(tlist.items);
         },
