@@ -25,7 +25,7 @@ pub fn serialize(comptime T: type, allocator: Allocator, data: T, list: *ArrayLi
                 var start_offset: usize = 0; // note that only numbers up to 255 will work
                 while (tlist.items[start_offset] == 0) : (start_offset += 1) {}
 
-                // copy final data + header
+                // copy final header + trimmed data
                 try list.append(@as(u8, @truncate(128 + tlist.items.len - start_offset)));
                 _ = try list.writer().write(tlist.items[start_offset..]);
             },
