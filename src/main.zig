@@ -17,21 +17,17 @@ pub fn serialize(comptime T: type, allocator: Allocator, data: T, list: *ArrayLi
             0...127 => list.append(@truncate(data)),
 
             else => {
-                // check how many bytes are needed to pack
-                // this integer.
-                const int_size = @sizeOf(T);
-                var packed_size: usize = int_size;
-                while (packed_size > 0) : (packed_size -= 1) {
-                    std.debug.print("{}\n", .{packed_size});
-                    const byte: u8 = @truncate(data >> 8 * (packed_size - 1));
-                    std.debug.print("{}\n", .{byte});
-                    if (byte != 0) {
-                        break;
-                    }
-                }
-                std.debug.print("final_size={}\n", .{packed_size});
-                try list.append(128 + int_size);
-                try list.writer().writeIntBig(T, data);
+                // write integer to temp buffer so that it can
+                // be left-trimmed.
+                var tlist = ArrayList(u8).init(list.allocator);
+                defer tlist.deinit();
+                try tlist.writer().writeIntBig(T, data);
+                var start_offset: usize = 0; // note that only numbers up to 255 will work
+                while (tlist.items[start_offset] == 0) : (start_offset += 1) {}
+
+                // copy final data + header
+                try list.append(@as(u8, @truncate(128 + tlist.items.len - start_offset)));
+                _ = try list.writer().write(tlist.items[start_offset..]);
             },
         },
         .Array => {
@@ -301,7 +297,7 @@ test "ensure an int is tightly packed" {
     defer list.deinit();
 
     const i: u256 = 0x1234;
-    const expected = [_]u8{ 0x81, 0x2, 0x12, 0x34 };
+    const expected = [_]u8{ 0x82, 0x12, 0x34 };
     try serialize(u256, testing.allocator, i, &list);
     std.debug.print("{any}\n", .{list.items});
     try testing.expect(std.mem.eql(u8, list.items[0..], expected[0..]));
