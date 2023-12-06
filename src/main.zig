@@ -14,7 +14,8 @@ pub fn serialize(comptime T: type, allocator: Allocator, data: T, list: *ArrayLi
     const info = @typeInfo(T);
     return switch (info) {
         .Int => switch (data) {
-            0...127 => list.append(@truncate(data)),
+            0 => list.append(0x80),
+            1...127 => list.append(@truncate(data)),
 
             else => {
                 // write integer to temp buffer so that it can
@@ -301,4 +302,12 @@ test "ensure an int is tightly packed" {
     try serialize(u256, testing.allocator, i, &list);
     std.debug.print("{any}\n", .{list.items});
     try testing.expect(std.mem.eql(u8, list.items[0..], expected[0..]));
+}
+
+test "zero" {
+    var out = ArrayList(u8).init(std.testing.allocator);
+    defer out.deinit();
+
+    try serialize(u8, std.testing.allocator, 0, &out);
+    try std.testing.expectEqualSlices(u8, &[_]u8{0x80}, out.items);
 }
