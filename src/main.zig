@@ -17,8 +17,17 @@ pub fn serialize(comptime T: type, allocator: Allocator, data: T, list: *ArrayLi
             0...127 => list.append(@truncate(data)),
 
             else => {
-                try list.append(128 + @sizeOf(T));
-                try list.writer().writeIntBig(T, data);
+                // write integer to temp buffer so that it can
+                // be left-trimmed.
+                var tlist = ArrayList(u8).init(list.allocator);
+                defer tlist.deinit();
+                try tlist.writer().writeIntBig(T, data);
+                var start_offset: usize = 0; // note that only numbers up to 255 will work
+                while (tlist.items[start_offset] == 0) : (start_offset += 1) {}
+
+                // copy final header + trimmed data
+                try list.append(@as(u8, @truncate(128 + tlist.items.len - start_offset)));
+                _ = try list.writer().write(tlist.items[start_offset..]);
             },
         },
         .Array => {
@@ -281,4 +290,15 @@ test "custom serializer" {
     try serialize(RLPEncodablePerson, testing.allocator, jdoe, &list);
     try testing.expect(list.items.len == 1);
     try testing.expect(list.items[0] == 42);
+}
+
+test "ensure an int is tightly packed" {
+    var list = ArrayList(u8).init(testing.allocator);
+    defer list.deinit();
+
+    const i: u256 = 0x1234;
+    const expected = [_]u8{ 0x82, 0x12, 0x34 };
+    try serialize(u256, testing.allocator, i, &list);
+    std.debug.print("{any}\n", .{list.items});
+    try testing.expect(std.mem.eql(u8, list.items[0..], expected[0..]));
 }
