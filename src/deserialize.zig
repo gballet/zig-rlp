@@ -120,19 +120,22 @@ pub fn deserialize(comptime T: type, serialized: []const u8, out: *T) !usize {
                     return 1 + size + size_size;
                 }
             } else {
-                if (serialized[0] < rlpByteListShortHeader) {
-                    return try deserialize(ptr.child, serialized[0..1], &out.*[0]);
-                } else if (serialized[0] < rlpByteListLongHeader) {
-                    const size = @as(usize, serialized[0] - rlpByteListShortHeader);
+                if (serialized[0] < rlpListShortHeader) {
+                    return error.NotAnRLPList;
+                }
+
+                if (serialized[0] < rlpListLongHeader) {
+                    const size = @as(usize, serialized[0] - rlpListShortHeader);
                     var i: usize = 0;
                     while (i < size) : (i += 1) {
                         i += try deserialize(ptr.child, serialized[1 + i ..], &out.*[i]);
                     }
                     return 1 + size;
                 } else {
-                    const size_size = @as(usize, serialized[0] - rlpByteListLongHeader);
+                    const size_size = @as(usize, serialized[0] - rlpListLongHeader);
                     var size = readIntSliceBig(usize, serialized[1..]) / std.math.pow(usize, 256, 8 - size_size);
                     var i: usize = 0;
+                    std.log.warn("out.length {}", .{out.*.len});
                     while (i + 1 < size) : (i += 1) {
                         i += try deserialize(ptr.child, serialized[1 + size_size + i ..], &out.*[i]);
                     }
@@ -363,4 +366,19 @@ test "detects an invalid length serialization" {
     // still present.
     const rlp_bytes = @embedFile("testdata/faulty_shanghai_block.rlp");
     _ = try expectError(error.InvalidSerializedLength, deserialize(Block, rlp_bytes[0..], &b));
+}
+
+test "access list empty" {
+    const StrippedTxn = struct {
+        access_list: []struct {
+            address: [20]u8,
+            storage_keys: [][32]u8,
+        },
+    };
+
+    var buf: [128]u8 = undefined;
+    const rlp = try std.fmt.hexToBytes(&buf, "c1c0");
+
+    var out: StrippedTxn = undefined;
+    _ = try deserialize(StrippedTxn, rlp, &out);
 }
