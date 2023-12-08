@@ -90,16 +90,13 @@ pub fn deserialize(comptime T: type, serialized: []const u8, out: *T) !usize {
             if (limit > serialized.len) {
                 return error.InvalidSerializedLength;
             }
-            if (offset > limit) {
-                std.debug.print("offset overflow for payload offset={} limit={}\n", .{ offset, limit });
-                return error.OffsetOverflow;
-            }
+
             inline for (struc.fields) |field| {
-                offset += try deserialize(field.type, serialized[offset..limit], &@field(out.*, field.name));
                 if (offset > limit) {
-                    std.debug.print("offset overflow for field {s} {any}\n", .{ field.name, field.type });
+                    std.debug.print("offset overflow for payload offset={} limit={} field name={s} type={any}\n", .{ offset, limit, field.name, field.type });
                     return error.OffsetOverflow;
                 }
+                offset += try deserialize(field.type, serialized[offset..limit], &@field(out.*, field.name));
             }
 
             return offset;
@@ -177,21 +174,14 @@ pub fn deserialize(comptime T: type, serialized: []const u8, out: *T) !usize {
             // (typical case: block structures being extended
             // fork after fork). In this latter case, the size
             // of the payload will be shorter than the number
-            // of fields, and so this special case needs to
-            // be caught here.
-            if (serialized.len == 0) {
+            // of fields, but returning an offset step of 0
+            // will cause the container deserialization to
+            // keep trying with the same offset, and that will
+            // mark all optional values as empty.
+            if (serialized.len == 0 or serialized[0] == rlpByteListShortHeader or serialized[0] == rlpListLongHeader) {
                 out.* = null;
-                // return 0 so that the above condition is true
-                // for multiple optional, missing fields.
-                return 0;
-            }
-
-            // general case: a field in the middle of a structure
-            // represented by either an empty value 0x80 or a full
-            // byte payload.
-            if (serialized[0] == rlpByteListShortHeader or serialized[0] == rlpListShortHeader) {
-                out.* = null;
-                return 1;
+                // 0 if serialized was empty, one in the case of an empty list
+                return serialized.len;
             } else {
                 var t: opt.child = undefined;
                 const offset = try deserialize(opt.child, serialized[0..], &t);
