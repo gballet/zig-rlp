@@ -300,7 +300,6 @@ test "ensure an int is tightly packed" {
     const i: u256 = 0x1234;
     const expected = [_]u8{ 0x82, 0x12, 0x34 };
     try serialize(u256, testing.allocator, i, &list);
-    std.debug.print("{any}\n", .{list.items});
     try testing.expect(std.mem.eql(u8, list.items[0..], expected[0..]));
 }
 
