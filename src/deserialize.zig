@@ -121,23 +121,25 @@ pub fn deserialize(comptime T: type, serialized: []const u8, out: *T) !usize {
                     return error.NotAnRLPList;
                 }
 
+                var size: usize = undefined;
+                var offset: usize = undefined;
+
                 if (serialized[0] < rlpListLongHeader) {
-                    const size = @as(usize, serialized[0] - rlpListShortHeader);
-                    var i: usize = 0;
-                    while (i < size) : (i += 1) {
-                        i += try deserialize(ptr.child, serialized[1 + i ..], &out.*[i]);
-                    }
-                    return 1 + size;
+                    size = @as(usize, serialized[0] - rlpListShortHeader);
+                    offset = 1;
                 } else {
                     const size_size = @as(usize, serialized[0] - rlpListLongHeader);
-                    var size = readIntSliceBig(usize, serialized[1..]) / std.math.pow(usize, 256, 8 - size_size);
-                    var i: usize = 0;
-                    std.log.warn("out.length {}", .{out.*.len});
-                    while (i + 1 < size) : (i += 1) {
-                        i += try deserialize(ptr.child, serialized[1 + size_size + i ..], &out.*[i]);
-                    }
-                    return 1 + size + size_size;
+                    size = readIntSliceBig(usize, serialized[1..]) / std.math.pow(usize, 256, 8 - size_size);
+                    offset = 1 + size_size;
                 }
+
+                var end = offset + size;
+                var i: usize = 0;
+                while (offset < end) : (i += 1) {
+                    offset += try deserialize(ptr.child, serialized[offset..], &out.*[i]);
+                }
+
+                return offset + size;
             },
             else => return error.UnSupportedType,
         },
