@@ -64,29 +64,9 @@ pub fn deserialize(comptime T: type, serialized: []const u8, out: *T) !usize {
     const info = @typeInfo(T);
     return switch (info) {
         .Int => {
-            if (serialized[0] < rlpByteListShortHeader) {
-                out.* = serialized[0];
-                return 1; // consumed the byte
-            } else if (serialized[0] < rlpByteListLongHeader) {
-                // Recover the payload size from the header.
-                const size = @as(usize, serialized[0] - rlpByteListShortHeader);
-
-                // Special case: empty value, return 0
-                if (size == 0) {
-                    return 1; // consumed the header
-                }
-
-                if (size > serialized.len + 1) {
-                    return error.EOF;
-                }
-                safeReadSliceIntBig(T, serialized[1 .. 1 + size], out);
-                return 1 + size;
-            } else {
-                const size_size = @as(usize, serialized[0] - rlpByteListLongHeader);
-                const size = readIntSliceBig(usize, serialized[1 .. 1 + size_size]);
-                safeReadSliceIntBig(T, serialized[1 + size_size ..], out);
-                return 1 + size_size + size;
-            }
+            const r = sizeAndDataOffset(serialized);
+            safeReadSliceIntBig(T, serialized[r.offset .. r.offset + r.size], out);
+            return r.offset + r.size;
         },
         .Struct => |struc| {
             if (serialized.len == 0) {
