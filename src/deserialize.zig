@@ -286,6 +286,17 @@ test "deserialize a byte array" {
     try expect(consumed == list.items.len);
 }
 
+test "deserialize a byte arrayi with a single byte" {
+    const expected = [_]u8{3};
+    var list = ArrayList(u8).init(std.testing.allocator);
+    defer list.deinit();
+    try serialize(@TypeOf(expected), std.testing.allocator, expected, &list);
+    var out: [1]u8 = undefined;
+    const consumed = try deserialize([1]u8, list.items[0..], &out);
+    try std.testing.expectEqual(expected, out);
+    try expect(consumed == list.items.len);
+}
+
 const RLPDecodablePerson = struct {
     name: []const u8,
     age: u8,
