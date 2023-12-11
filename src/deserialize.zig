@@ -367,17 +367,3 @@ test "deserialize a byte slice" {
     _ = try deserialize([]const u8, rlp, &out_);
 }
 
-// test "access list filled" {
-//     const AccessListItem = struct {
-//         address: [20]u8,
-//         storage_keys: [][32]u8,
-//     };
-//     const StrippedTxn = struct {
-//         access_list: []AccessListItem,
-//     };
-
-//     var buf: [128]u8 = undefined;
-//     const rlp = try std.fmt.hexToBytes(&buf, "f83af838f7940000000000000000000000000000000000001210e1a00000000000000000000000000000000000000000000000000000000000000203");
-//     var out: StrippedTxn = StrippedTxn{ .access_list = &[0]AccessListItem{} };
-//     _ = try deserialize(StrippedTxn, rlp, &out);
-// }
