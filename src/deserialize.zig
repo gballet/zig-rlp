@@ -83,21 +83,15 @@ pub fn deserialize(comptime T: type, serialized: []const u8, out: *T) !usize {
             if (serialized[0] < rlpListShortHeader) {
                 return error.NotAnRLPList;
             }
-            var size: usize = undefined;
-            var offset: usize = 1;
-            if (serialized[0] < rlpListLongHeader) {
-                size = @as(usize, serialized[0] - rlpListShortHeader);
-            } else {
-                const size_size = @as(usize, serialized[0] - rlpListLongHeader);
-                offset += size_size;
-                size = readIntSliceBig(usize, serialized[1..]) / std.math.pow(usize, 256, 8 - size_size);
-            }
+
+            var r = sizeAndDataOffset(serialized);
             // limit of the struct's rlp encoding inside the larger buffer
-            const limit = offset + size;
+            const limit = r.offset + r.size;
             if (limit > serialized.len) {
                 return error.InvalidSerializedLength;
             }
 
+            var offset = r.offset;
             inline for (struc.fields) |field| {
                 if (offset > limit) {
                     std.debug.print("offset overflow for payload offset={} limit={} field name={s} type={any}\n", .{ offset, limit, field.name, field.type });
@@ -106,7 +100,7 @@ pub fn deserialize(comptime T: type, serialized: []const u8, out: *T) !usize {
                 offset += try deserialize(field.type, serialized[offset..limit], &@field(out.*, field.name));
             }
 
-            return offset;
+            return limit;
         },
         .Pointer => |ptr| switch (ptr.size) {
             .Slice => if (ptr.child == u8) {
@@ -132,6 +126,7 @@ pub fn deserialize(comptime T: type, serialized: []const u8, out: *T) !usize {
         },
         .Array => |ary| if (@sizeOf(ary.child) == 1) {
             var r = sizeAndDataOffset(serialized);
+            // this is a fixed-size array, so the destination has already been allocated.
             std.mem.copy(u8, out.*[0..], serialized[r.offset .. r.offset + r.size]);
             return r.offset + r.size;
         } else return error.UnsupportedType,
