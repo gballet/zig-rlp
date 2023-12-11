@@ -124,6 +124,19 @@ pub fn deserialize(comptime T: type, serialized: []const u8, out: *T) !usize {
         },
         .Pointer => |ptr| switch (ptr.size) {
             .Slice => if (ptr.child == u8) {
+                // if (serialized[0] < rlpByteListShortHeader) {
+                //     out.* = serialized[0..1];
+                //     return 1;
+                // } else if (serialized[0] < rlpByteListLongHeader) {
+                //     const size = @as(usize, serialized[0] - rlpByteListShortHeader);
+                //     out.* = serialized[1 .. 1 + size];
+                //     return 1 + size;
+                // } else {
+                //     const size_size = @as(usize, serialized[0] - rlpByteListLongHeader);
+                //     const size = readIntSliceBig(usize, serialized[1 .. 1 + size_size]);
+                //     out.* = serialized[1 + size_size .. 1 + size_size + size];
+                //     return 1 + size + size_size;
+                // }
                 var r = sizeAndDataOffset(serialized);
                 std.debug.print("{} {}\n", .{ r.offset, r.size });
                 out.* = serialized[r.offset .. r.offset + r.size];
@@ -143,6 +156,7 @@ pub fn deserialize(comptime T: type, serialized: []const u8, out: *T) !usize {
                     const size_size = @as(usize, serialized[0] - rlpListLongHeader);
                     size = readIntSliceBig(usize, serialized[1..]) / std.math.pow(usize, 256, 8 - size_size);
                     offset = 1 + size_size;
+                    std.log.warn("out.length {} {} {} {any}", .{ out.*.len, size_size, offset, serialized[offset..] });
                 }
 
                 var end = offset + size;
@@ -393,5 +407,20 @@ test "deserialize a byte slice" {
     var out = [_]u8{0} ** 20;
     var out_: []u8 = out[0..];
 
-    const deserialized = try deserialize([]const u8, rlp, &out_);
+    _ = try deserialize([]const u8, rlp, &out_);
 }
+
+// test "access list filled" {
+//     const AccessListItem = struct {
+//         address: [20]u8,
+//         storage_keys: [][32]u8,
+//     };
+//     const StrippedTxn = struct {
+//         access_list: []AccessListItem,
+//     };
+
+//     var buf: [128]u8 = undefined;
+//     const rlp = try std.fmt.hexToBytes(&buf, "f83af838f7940000000000000000000000000000000000001210e1a00000000000000000000000000000000000000000000000000000000000000203");
+//     var out: StrippedTxn = StrippedTxn{ .access_list = &[0]AccessListItem{} };
+//     _ = try deserialize(StrippedTxn, rlp, &out);
+// }
