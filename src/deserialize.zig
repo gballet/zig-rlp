@@ -377,8 +377,9 @@ test "access list empty" {
 
 test "deserialize a byte slice" {
     var buf: [128]u8 = undefined;
-    const rlp = try std.fmt.hexToBytes(&buf, "f7940000000000000000000000000000000000001210");
-    var out: []u8 = undefined;
+    const rlp = try std.fmt.hexToBytes(&buf, "940000000000000000000000000000000000001210");
+    var out = [_]u8{0} ** 20;
+    var out_: []u8 = out[0..];
 
-    _ = try deserialize([]const u8, rlp, &out);
+    const deserialized = try deserialize([]const u8, rlp, &out_);
 }
