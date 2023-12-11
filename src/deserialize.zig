@@ -366,4 +366,3 @@ test "deserialize a byte slice" {
 
     _ = try deserialize([]const u8, rlp, &out_);
 }
-
