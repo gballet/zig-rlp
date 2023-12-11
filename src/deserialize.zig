@@ -35,6 +35,27 @@ inline fn safeReadSliceIntBig(comptime T: type, payload: []const u8, out: *T) vo
     }
 }
 
+// Returns the size of the payload as well as the offset to the
+// start of the actual data.
+fn sizeAndDataOffset(payload: []const u8) struct { size: usize, offset: usize } {
+    var size: usize = undefined;
+    var offset: usize = undefined;
+
+    if (payload[0] < rlpByteListShortHeader) {
+        offset = 0;
+        size = 1;
+    } else if (payload[0] < rlpByteListLongHeader) {
+        size = @as(usize, payload[0] - rlpByteListShortHeader);
+        offset = 1;
+    } else {
+        const size_size = @as(usize, payload[0] - rlpByteListLongHeader);
+        size = readIntSliceBig(usize, payload[1 .. 1 + size_size]);
+        offset = 1 + size_size;
+    }
+
+    return .{ .size = size, .offset = offset };
+}
+
 // Returns the amount of data consumed from `serialized`.
 pub fn deserialize(comptime T: type, serialized: []const u8, out: *T) !usize {
     if (comptime implementsDecodeRLP(T)) {
@@ -103,19 +124,10 @@ pub fn deserialize(comptime T: type, serialized: []const u8, out: *T) !usize {
         },
         .Pointer => |ptr| switch (ptr.size) {
             .Slice => if (ptr.child == u8) {
-                if (serialized[0] < rlpByteListShortHeader) {
-                    out.* = serialized[0..1];
-                    return 1;
-                } else if (serialized[0] < rlpByteListLongHeader) {
-                    const size = @as(usize, serialized[0] - rlpByteListShortHeader);
-                    out.* = serialized[1 .. 1 + size];
-                    return 1 + size;
-                } else {
-                    const size_size = @as(usize, serialized[0] - rlpByteListLongHeader);
-                    const size = readIntSliceBig(usize, serialized[1 .. 1 + size_size]);
-                    out.* = serialized[1 + size_size .. 1 + size_size + size];
-                    return 1 + size + size_size;
-                }
+                var r = sizeAndDataOffset(serialized);
+                std.debug.print("{} {}\n", .{ r.offset, r.size });
+                out.* = serialized[r.offset .. r.offset + r.size];
+                return r.offset + r.size;
             } else {
                 if (serialized[0] < rlpListShortHeader) {
                     return error.NotAnRLPList;
