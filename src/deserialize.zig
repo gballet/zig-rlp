@@ -105,7 +105,6 @@ pub fn deserialize(comptime T: type, serialized: []const u8, out: *T) !usize {
         .Pointer => |ptr| switch (ptr.size) {
             .Slice => if (ptr.child == u8) {
                 var r = sizeAndDataOffset(serialized);
-                std.debug.print("{} {}\n", .{ r.offset, r.size });
                 out.* = serialized[r.offset .. r.offset + r.size];
                 return r.offset + r.size;
             } else {
