@@ -47,12 +47,18 @@ fn sizeAndDataOffset(payload: []const u8) struct { size: usize, offset: usize } 
     } else if (payload[0] < rlpByteListLongHeader) {
         size = @as(usize, payload[0] - rlpByteListShortHeader);
         offset = 1;
-    } else {
+    } else if (payload[0] < rlpListShortHeader) {
         const size_size = @as(usize, payload[0] - rlpByteListLongHeader);
         safeReadSliceIntBig(usize, payload[1 .. 1 + size_size], &size);
         offset = 1 + size_size;
+    } else if (payload[0] < rlpListLongHeader) {
+        size = @as(usize, payload[0] - rlpListShortHeader);
+        offset = 1;
+    } else {
+        const size_size = @as(usize, payload[0] - rlpListLongHeader);
+        safeReadSliceIntBig(usize, payload[1 .. 1 + size_size], &size);
+        offset = 1 + size_size;
     }
-
     return .{ .size = size, .offset = offset };
 }
 
@@ -112,26 +118,15 @@ pub fn deserialize(comptime T: type, serialized: []const u8, out: *T) !usize {
                     return error.NotAnRLPList;
                 }
 
-                var size: usize = undefined;
-                var offset: usize = undefined;
-
-                if (serialized[0] < rlpListLongHeader) {
-                    size = @as(usize, serialized[0] - rlpListShortHeader);
-                    offset = 1;
-                } else {
-                    const size_size = @as(usize, serialized[0] - rlpListLongHeader);
-                    size = readIntSliceBig(usize, serialized[1..]) / std.math.pow(usize, 256, 8 - size_size);
-                    offset = 1 + size_size;
-                    std.log.warn("out.length {} {} {} {any}", .{ out.*.len, size_size, offset, serialized[offset..] });
-                }
-
-                var end = offset + size;
+                const r = sizeAndDataOffset(serialized);
+                var end = r.offset + r.size;
+                var offset = r.offset;
                 var i: usize = 0;
                 while (offset < end) : (i += 1) {
                     offset += try deserialize(ptr.child, serialized[offset..], &out.*[i]);
                 }
 
-                return offset + size;
+                return end;
             },
             else => return error.UnSupportedType,
         },
