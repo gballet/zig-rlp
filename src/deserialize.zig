@@ -374,3 +374,11 @@ test "access list empty" {
     var out: StrippedTxn = undefined;
     _ = try deserialize(StrippedTxn, rlp, &out);
 }
+
+test "deserialize a byte slice" {
+    var buf: [128]u8 = undefined;
+    const rlp = try std.fmt.hexToBytes(&buf, "f7940000000000000000000000000000000000001210");
+    var out: []u8 = undefined;
+
+    _ = try deserialize([]const u8, rlp, &out);
+}
