@@ -49,7 +49,7 @@ fn sizeAndDataOffset(payload: []const u8) struct { size: usize, offset: usize } 
         offset = 1;
     } else {
         const size_size = @as(usize, payload[0] - rlpByteListLongHeader);
-        size = readIntSliceBig(usize, payload[1 .. 1 + size_size]);
+        safeReadSliceIntBig(usize, payload[1 .. 1 + size_size], &size);
         offset = 1 + size_size;
     }
 
@@ -124,19 +124,6 @@ pub fn deserialize(comptime T: type, serialized: []const u8, out: *T) !usize {
         },
         .Pointer => |ptr| switch (ptr.size) {
             .Slice => if (ptr.child == u8) {
-                // if (serialized[0] < rlpByteListShortHeader) {
-                //     out.* = serialized[0..1];
-                //     return 1;
-                // } else if (serialized[0] < rlpByteListLongHeader) {
-                //     const size = @as(usize, serialized[0] - rlpByteListShortHeader);
-                //     out.* = serialized[1 .. 1 + size];
-                //     return 1 + size;
-                // } else {
-                //     const size_size = @as(usize, serialized[0] - rlpByteListLongHeader);
-                //     const size = readIntSliceBig(usize, serialized[1 .. 1 + size_size]);
-                //     out.* = serialized[1 + size_size .. 1 + size_size + size];
-                //     return 1 + size + size_size;
-                // }
                 var r = sizeAndDataOffset(serialized);
                 std.debug.print("{} {}\n", .{ r.offset, r.size });
                 out.* = serialized[r.offset .. r.offset + r.size];
@@ -170,29 +157,9 @@ pub fn deserialize(comptime T: type, serialized: []const u8, out: *T) !usize {
             else => return error.UnSupportedType,
         },
         .Array => |ary| if (@sizeOf(ary.child) == 1) {
-            if (serialized[0] < rlpByteListShortHeader) {
-                out.*[0] = serialized[0];
-                return 1;
-            } else if (serialized[0] < rlpByteListLongHeader) {
-                const size = @as(usize, serialized[0] - rlpByteListShortHeader);
-                // The target might be larger than the payload, as 0s are not
-                // stored in the RLP encoding.
-                if (size > out.len)
-                    return error.InvalidArrayLength;
-
-                std.mem.copy(u8, out.*[0..], serialized[1 .. 1 + size]);
-                return 1 + size;
-            } else {
-                const size_size = @as(usize, serialized[0] - rlpByteListLongHeader);
-                var padded_bytes: [8]u8 = [_]u8{0} ** 8;
-                @memcpy(padded_bytes[8 - size_size ..], serialized[1 .. 1 + size_size]);
-                const size = readIntSliceBig(usize, &padded_bytes);
-                if (size != out.len) {
-                    return error.InvalidArrayLength;
-                }
-                std.mem.copy(u8, out.*[0..], serialized[1 + size_size .. 1 + size_size + size]);
-                return 1 + size + size_size;
-            }
+            var r = sizeAndDataOffset(serialized);
+            std.mem.copy(u8, out.*[0..], serialized[r.offset .. r.offset + r.size]);
+            return r.offset + r.size;
         } else return error.UnsupportedType,
         .Optional => |opt| {
             // There are two types of optional: those in the
