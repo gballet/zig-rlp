@@ -34,23 +34,28 @@ pub fn serialize(comptime T: type, allocator: Allocator, data: T, list: *ArrayLi
         .Array => {
             // shortcut for byte lists
             if (@sizeOf(info.Array.child) == 1) {
-                if (data.len < 56) {
-                    try list.append(128 + data.len);
-                } else {
-                    comptime var length_length = 0;
-                    comptime {
-                        var l = @sizeOf(T);
-                        while (l != 0) : (l >>= 8) {
-                            length_length += 1;
+                switch (data.len) {
+                    0 => try list.append(128),
+                    1 => if (data[0] >= 128) {
+                        try list.append(129);
+                    },
+                    2...55 => try list.append(128 + data.len),
+                    else => {
+                        comptime var length_length = 0;
+                        comptime {
+                            var l = @sizeOf(T);
+                            while (l != 0) : (l >>= 8) {
+                                length_length += 1;
+                            }
                         }
-                    }
-                    try list.append(183 + length_length);
-                    comptime var i = 0;
-                    comptime var length = @sizeOf(T);
-                    inline while (i < length_length) : (i += 1) {
-                        try list.append(@as(u8, @truncate(length)));
-                        length >>= 8;
-                    }
+                        try list.append(183 + length_length);
+                        comptime var i = 0;
+                        comptime var length = @sizeOf(T);
+                        inline while (i < length_length) : (i += 1) {
+                            try list.append(@as(u8, @truncate(length)));
+                            length >>= 8;
+                        }
+                    },
                 }
                 _ = try list.writer().write(data[0..]);
             } else {
