@@ -156,10 +156,7 @@ pub fn deserialize(comptime T: type, serialized: []const u8, out: *T, allocator:
             },
             .One => {
                 out.* = try allocator.create(ptr.child);
-                const r = try sizeAndDataOffset(serialized);
-                var end = r.offset + r.size;
-                _ = try deserialize(ptr.child, serialized[r.offset..end], out.*, allocator);
-                return end;
+                return deserialize(ptr.child, serialized, out.*, allocator);
             },
             // TODO missing: Many, C
             else => return error.UnSupportedType,
@@ -402,4 +399,5 @@ test "deserialize a pointer to an integer" {
     var out: *u256 = undefined;
     _ = try deserialize(*u256, &rlp, &out, std.testing.allocator);
     defer std.testing.allocator.destroy(out);
+    _ = try std.testing.expectEqual(out.*, 0x0102030405060708090a);
 }
