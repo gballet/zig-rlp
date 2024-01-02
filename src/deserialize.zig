@@ -154,6 +154,14 @@ pub fn deserialize(comptime T: type, serialized: []const u8, out: *T, allocator:
 
                 return end;
             },
+            .One => {
+                out.* = try allocator.create(ptr.child);
+                const r = try sizeAndDataOffset(serialized);
+                var end = r.offset + r.size;
+                _ = try deserialize(ptr.child, serialized[r.offset..end], out.*, allocator);
+                return end;
+            },
+            // TODO missing: Many, C
             else => return error.UnSupportedType,
         },
         .Array => |ary| if (@sizeOf(ary.child) == 1) {
@@ -387,4 +395,11 @@ test "deserialize a byte slice" {
     var out_: []u8 = out[0..];
 
     _ = try deserialize([]const u8, rlp, &out_, std.testing.allocator);
+}
+
+test "deserialize a pointer to an integer" {
+    const rlp = [_]u8{ 138, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 };
+    var out: *u256 = undefined;
+    _ = try deserialize(*u256, &rlp, &out, std.testing.allocator);
+    defer std.testing.allocator.destroy(out);
 }
