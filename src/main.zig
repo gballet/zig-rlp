@@ -327,7 +327,7 @@ test "access list filled" {
 
     var buf: [128]u8 = undefined;
     const rlp = try std.fmt.hexToBytes(&buf, "f83af838f7940000000000000000000000000000000000001210e1a00000000000000000000000000000000000000000000000000000000000000203");
-    var out: StrippedTxn = StrippedTxn{ .access_list = &[0]AccessListItem{} };
+    var out: StrippedTxn = undefined; // StrippedTxn{ .access_list = &[0]AccessListItem{} };
     _ = try deserialize(StrippedTxn, rlp, &out, testing.allocator);
 
     const expected_address = [_]u8{0} ** 18 ++ [_]u8{ 0x12, 0x10 };
