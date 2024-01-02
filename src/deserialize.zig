@@ -120,7 +120,6 @@ pub fn deserialize(comptime T: type, serialized: []const u8, out: *T, allocator:
             var offset = r.offset;
             inline for (struc.fields) |field| {
                 if (offset > limit) {
-                    std.debug.print("offset overflow for payload offset={} limit={} field name={s} type={any}\n", .{ offset, limit, field.name, field.type });
                     return error.OffsetOverflow;
                 }
                 offset += try deserialize(field.type, serialized[offset..limit], &@field(out.*, field.name), allocator);
