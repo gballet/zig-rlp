@@ -315,3 +315,27 @@ test "zero" {
     try serialize(u8, std.testing.allocator, 0, &out);
     try std.testing.expectEqualSlices(u8, &[_]u8{0x80}, out.items);
 }
+
+test "access list filled" {
+    const AccessListItem = struct {
+        address: [20]u8,
+        storage_keys: [][32]u8,
+    };
+    const StrippedTxn = struct {
+        access_list: []AccessListItem,
+    };
+
+    var buf: [128]u8 = undefined;
+    const rlp = try std.fmt.hexToBytes(&buf, "f83af838f7940000000000000000000000000000000000001210e1a00000000000000000000000000000000000000000000000000000000000000203");
+    var out: StrippedTxn = undefined;
+    _ = try deserialize(StrippedTxn, rlp, &out, testing.allocator);
+
+    const expected_address = [_]u8{0} ** 18 ++ [_]u8{ 0x12, 0x10 };
+    try testing.expectEqual(out.access_list[0].address, expected_address);
+
+    const expected_access = [_]u8{0} ** 30 ++ [_]u8{ 2, 3 };
+    try testing.expectEqual(out.access_list[0].storage_keys[0], expected_access);
+
+    testing.allocator.free(out.access_list[0].storage_keys);
+    testing.allocator.free(out.access_list);
+}

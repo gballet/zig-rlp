@@ -37,9 +37,13 @@ inline fn safeReadSliceIntBig(comptime T: type, payload: []const u8, out: *T) vo
 
 // Returns the size of the payload as well as the offset to the
 // start of the actual data.
-fn sizeAndDataOffset(payload: []const u8) struct { size: usize, offset: usize } {
+fn sizeAndDataOffset(payload: []const u8) !struct { size: usize, offset: usize } {
     var size: usize = undefined;
     var offset: usize = undefined;
+
+    if (payload.len == 0) {
+        return error.RlpPayloadTooShort;
+    }
 
     if (payload[0] < rlpByteListShortHeader) {
         offset = 0;
@@ -49,28 +53,50 @@ fn sizeAndDataOffset(payload: []const u8) struct { size: usize, offset: usize } 
         offset = 1;
     } else if (payload[0] < rlpListShortHeader) {
         const size_size = @as(usize, payload[0] - rlpByteListLongHeader);
+
+        if (payload.len < 1 + size_size) {
+            return error.RlpPayloadTooShort;
+        }
+
         safeReadSliceIntBig(usize, payload[1 .. 1 + size_size], &size);
         offset = 1 + size_size;
-    } else if (payload[0] < rlpListLongHeader) {
+    } else if (payload[0] <= rlpListLongHeader) {
         size = @as(usize, payload[0] - rlpListShortHeader);
         offset = 1;
     } else {
         const size_size = @as(usize, payload[0] - rlpListLongHeader);
+
+        if (payload.len < 1 + size_size) {
+            return error.RlpPayloadTooShort;
+        }
+
         safeReadSliceIntBig(usize, payload[1 .. 1 + size_size], &size);
         offset = 1 + size_size;
     }
     return .{ .size = size, .offset = offset };
 }
 
+// Count the number of elements in a list
+fn countRlpListItems(serialized: []const u8) !usize {
+    var offset: usize = 0;
+    var list_size: usize = 0;
+    while (offset < serialized.len) : (list_size += 1) {
+        var temp = try sizeAndDataOffset(serialized[offset..]);
+        offset += temp.offset + temp.size;
+    }
+    return list_size;
+}
+
 // Returns the amount of data consumed from `serialized`.
-pub fn deserialize(comptime T: type, serialized: []const u8, out: *T) !usize {
+pub fn deserialize(comptime T: type, serialized: []const u8, out: *T, allocator: std.mem.Allocator) !usize {
     if (comptime implementsDecodeRLP(T)) {
         return out.decodeRLP(serialized);
     }
+
     const info = @typeInfo(T);
     return switch (info) {
         .Int => {
-            const r = sizeAndDataOffset(serialized);
+            const r = try sizeAndDataOffset(serialized);
             safeReadSliceIntBig(T, serialized[r.offset .. r.offset + r.size], out);
             return r.offset + r.size;
         },
@@ -84,7 +110,7 @@ pub fn deserialize(comptime T: type, serialized: []const u8, out: *T) !usize {
                 return error.NotAnRLPList;
             }
 
-            var r = sizeAndDataOffset(serialized);
+            var r = try sizeAndDataOffset(serialized);
             // limit of the struct's rlp encoding inside the larger buffer
             const limit = r.offset + r.size;
             if (limit > serialized.len) {
@@ -97,14 +123,14 @@ pub fn deserialize(comptime T: type, serialized: []const u8, out: *T) !usize {
                     std.debug.print("offset overflow for payload offset={} limit={} field name={s} type={any}\n", .{ offset, limit, field.name, field.type });
                     return error.OffsetOverflow;
                 }
-                offset += try deserialize(field.type, serialized[offset..limit], &@field(out.*, field.name));
+                offset += try deserialize(field.type, serialized[offset..limit], &@field(out.*, field.name), allocator);
             }
 
             return limit;
         },
         .Pointer => |ptr| switch (ptr.size) {
             .Slice => if (ptr.child == u8) {
-                var r = sizeAndDataOffset(serialized);
+                var r = try sizeAndDataOffset(serialized);
                 out.* = serialized[r.offset .. r.offset + r.size];
                 return r.offset + r.size;
             } else {
@@ -112,12 +138,19 @@ pub fn deserialize(comptime T: type, serialized: []const u8, out: *T) !usize {
                     return error.NotAnRLPList;
                 }
 
-                const r = sizeAndDataOffset(serialized);
+                const r = try sizeAndDataOffset(serialized);
                 var end = r.offset + r.size;
+
+                const list_size = try countRlpListItems(serialized[r.offset..end]);
+
+                // since it's not possible to say if the slice is "undefined", it has
+                // to be allocated regardless.
+                out.* = try allocator.alloc(ptr.child, list_size);
+
                 var offset = r.offset;
                 var i: usize = 0;
                 while (offset < end) : (i += 1) {
-                    offset += try deserialize(ptr.child, serialized[offset..], &out.*[i]);
+                    offset += try deserialize(ptr.child, serialized[offset..], &out.*[i], allocator);
                 }
 
                 return end;
@@ -125,7 +158,7 @@ pub fn deserialize(comptime T: type, serialized: []const u8, out: *T) !usize {
             else => return error.UnSupportedType,
         },
         .Array => |ary| if (@sizeOf(ary.child) == 1) {
-            var r = sizeAndDataOffset(serialized);
+            var r = try sizeAndDataOffset(serialized);
             // this is a fixed-size array, so the destination has already been allocated.
             std.mem.copy(u8, out.*[0..], serialized[r.offset .. r.offset + r.size]);
             return r.offset + r.size;
@@ -148,7 +181,7 @@ pub fn deserialize(comptime T: type, serialized: []const u8, out: *T) !usize {
                 return serialized.len;
             } else {
                 var t: opt.child = undefined;
-                const offset = try deserialize(opt.child, serialized[0..], &t);
+                const offset = try deserialize(opt.child, serialized[0..], &t, allocator);
                 out.* = t;
                 return offset;
             }
@@ -162,25 +195,25 @@ test "deserialize an integer" {
 
     const su8lo = [_]u8{42};
     var u8lo: u8 = undefined;
-    consumed = try deserialize(u8, su8lo[0..], &u8lo);
+    consumed = try deserialize(u8, su8lo[0..], &u8lo, std.testing.allocator);
     try expect(u8lo == 42);
     try expect(consumed == 1);
 
     const su8hi = [_]u8{ 129, 192 };
     var u8hi: u8 = undefined;
-    consumed = try deserialize(u8, su8hi[0..], &u8hi);
+    consumed = try deserialize(u8, su8hi[0..], &u8hi, std.testing.allocator);
     try expect(u8hi == 192);
     try expect(consumed == su8hi.len);
 
     const su16small = [_]u8{ 129, 192 };
     var u16small: u16 = undefined;
-    consumed = try deserialize(u16, su16small[0..], &u16small);
+    consumed = try deserialize(u16, su16small[0..], &u16small, std.testing.allocator);
     try expect(u16small == 192);
     try expect(consumed == su16small.len);
 
     const su16long = [_]u8{ 130, 192, 192 };
     var u16long: u16 = undefined;
-    consumed = try deserialize(u16, su16long[0..], &u16long);
+    consumed = try deserialize(u16, su16long[0..], &u16long, std.testing.allocator);
     try expect(u16long == 0xc0c0);
     try expect(consumed == su16long.len);
 }
@@ -195,7 +228,7 @@ test "deserialize a structure" {
     defer list.deinit();
     try serialize(Person, std.testing.allocator, jc, &list);
     var p: Person = undefined;
-    const consumed = try deserialize(Person, list.items[0..], &p);
+    const consumed = try deserialize(Person, list.items[0..], &p, std.testing.allocator);
     try expect(consumed == list.items.len);
     try expect(p.age == jc.age);
     try expect(eql(u8, p.name, jc.name));
@@ -206,7 +239,7 @@ test "deserialize a string" {
     defer list.deinit();
     try serialize([]const u8, std.testing.allocator, str, &list);
     var s: []const u8 = undefined;
-    const consumed = try deserialize([]const u8, list.items[0..], &s);
+    const consumed = try deserialize([]const u8, list.items[0..], &s, std.testing.allocator);
     try expect(eql(u8, str, s));
     try expect(consumed == list.items.len);
 }
@@ -217,7 +250,7 @@ test "deserialize a byte array" {
     defer list.deinit();
     try serialize(@TypeOf(expected), std.testing.allocator, expected, &list);
     var out: [3]u8 = undefined;
-    const consumed = try deserialize([3]u8, list.items[0..], &out);
+    const consumed = try deserialize([3]u8, list.items[0..], &out, std.testing.allocator);
     try expect(eql(u8, expected[0..], out[0..]));
     try expect(consumed == list.items.len);
 }
@@ -228,7 +261,7 @@ test "deserialize a byte arrayi with a single byte" {
     defer list.deinit();
     try serialize(@TypeOf(expected), std.testing.allocator, expected, &list);
     var out: [1]u8 = undefined;
-    const consumed = try deserialize([1]u8, list.items[0..], &out);
+    const consumed = try deserialize([1]u8, list.items[0..], &out, std.testing.allocator);
     try std.testing.expectEqual(expected, out);
     try expect(consumed == list.items.len);
 }
@@ -251,7 +284,7 @@ const RLPDecodablePerson = struct {
 test "deserialize with custom serializer" {
     var person: RLPDecodablePerson = undefined;
     const serialized = [_]u8{42};
-    const consumed = try deserialize(RLPDecodablePerson, serialized[0..], &person);
+    const consumed = try deserialize(RLPDecodablePerson, serialized[0..], &person, std.testing.allocator);
     try expect(person.age == serialized[0]);
     try expect(consumed == 1);
 }
@@ -263,14 +296,14 @@ test "deserialize an optional" {
 
     try serialize(?u32, std.testing.allocator, x, &list);
     var y: ?u32 = undefined;
-    _ = try deserialize(?u32, list.items, &y);
+    _ = try deserialize(?u32, list.items, &y, std.testing.allocator);
     try expect(y == null);
 
     list.clearAndFree();
     x = 32;
     var z: ?u32 = undefined;
     try serialize(?u32, std.testing.allocator, x, &list);
-    _ = try deserialize(?u32, list.items, &z);
+    _ = try deserialize(?u32, list.items, &z, std.testing.allocator);
     try expect(z.? == x.?);
 }
 
@@ -284,7 +317,7 @@ test "deserialize a structure with missing optional fields at the end" {
     const serialized = [_]u8{ 0xc6, 0x84, 0xde, 0xad, 0xbe, 0xef, 5 };
 
     var mystruct: structWithTrailingOptionalFields = undefined;
-    _ = try deserialize(structWithTrailingOptionalFields, serialized[0..], &mystruct);
+    _ = try deserialize(structWithTrailingOptionalFields, serialized[0..], &mystruct, std.testing.allocator);
     try expect(mystruct.x == 0xdeadbeef);
     try expect(mystruct.y != null and mystruct.y.? == 5);
     try expect(mystruct.z == null);
@@ -321,7 +354,7 @@ test "deserialize a shanghai block" {
     var b: Block = undefined;
 
     const rlp_bytes = @embedFile("testdata/shanghai_block_1.rlp");
-    _ = try deserialize(Block, rlp_bytes[0..], &b);
+    _ = try deserialize(Block, rlp_bytes[0..], &b, std.testing.allocator);
 }
 
 test "detects an invalid length serialization" {
@@ -330,7 +363,7 @@ test "detects an invalid length serialization" {
     // removed part of the *header* payload but other fields are
     // still present.
     const rlp_bytes = @embedFile("testdata/faulty_shanghai_block.rlp");
-    _ = try expectError(error.InvalidSerializedLength, deserialize(Block, rlp_bytes[0..], &b));
+    _ = try expectError(error.InvalidSerializedLength, deserialize(Block, rlp_bytes[0..], &b, std.testing.allocator));
 }
 
 test "access list empty" {
@@ -345,7 +378,7 @@ test "access list empty" {
     const rlp = try std.fmt.hexToBytes(&buf, "c1c0");
 
     var out: StrippedTxn = undefined;
-    _ = try deserialize(StrippedTxn, rlp, &out);
+    _ = try deserialize(StrippedTxn, rlp, &out, std.testing.allocator);
 }
 
 test "deserialize a byte slice" {
@@ -354,5 +387,5 @@ test "deserialize a byte slice" {
     var out = [_]u8{0} ** 20;
     var out_: []u8 = out[0..];
 
-    _ = try deserialize([]const u8, rlp, &out_);
+    _ = try deserialize([]const u8, rlp, &out_, std.testing.allocator);
 }
