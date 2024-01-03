@@ -37,9 +37,13 @@ inline fn safeReadSliceIntBig(comptime T: type, payload: []const u8, out: *T) vo
 
 // Returns the size of the payload as well as the offset to the
 // start of the actual data.
-fn sizeAndDataOffset(payload: []const u8) struct { size: usize, offset: usize } {
+fn sizeAndDataOffset(payload: []const u8) !struct { size: usize, offset: usize } {
     var size: usize = undefined;
     var offset: usize = undefined;
+
+    if (payload.len == 0) {
+        return error.RlpPayloadTooShort;
+    }
 
     if (payload[0] < rlpByteListShortHeader) {
         offset = 0;
@@ -49,6 +53,11 @@ fn sizeAndDataOffset(payload: []const u8) struct { size: usize, offset: usize } 
         offset = 1;
     } else if (payload[0] < rlpListShortHeader) {
         const size_size = @as(usize, payload[0] - rlpByteListLongHeader);
+
+        if (payload.len < 1 + size_size) {
+            return error.RlpPayloadTooShort;
+        }
+
         safeReadSliceIntBig(usize, payload[1 .. 1 + size_size], &size);
         offset = 1 + size_size;
     } else if (payload[0] <= rlpListLongHeader) {
@@ -56,10 +65,26 @@ fn sizeAndDataOffset(payload: []const u8) struct { size: usize, offset: usize } 
         offset = 1;
     } else {
         const size_size = @as(usize, payload[0] - rlpListLongHeader);
+
+        if (payload.len < 1 + size_size) {
+            return error.RlpPayloadTooShort;
+        }
+
         safeReadSliceIntBig(usize, payload[1 .. 1 + size_size], &size);
         offset = 1 + size_size;
     }
     return .{ .size = size, .offset = offset };
+}
+
+// Count the number of elements in a list
+fn countRlpListItems(serialized: []const u8) !usize {
+    var offset: usize = 0;
+    var list_size: usize = 0;
+    while (offset < serialized.len) : (list_size += 1) {
+        var temp = try sizeAndDataOffset(serialized[offset..]);
+        offset += temp.offset + temp.size;
+    }
+    return list_size;
 }
 
 // Returns the amount of data consumed from `serialized`.
@@ -71,7 +96,7 @@ pub fn deserialize(comptime T: type, serialized: []const u8, out: *T, allocator:
     const info = @typeInfo(T);
     return switch (info) {
         .Int => {
-            const r = sizeAndDataOffset(serialized);
+            const r = try sizeAndDataOffset(serialized);
             safeReadSliceIntBig(T, serialized[r.offset .. r.offset + r.size], out);
             return r.offset + r.size;
         },
@@ -85,7 +110,7 @@ pub fn deserialize(comptime T: type, serialized: []const u8, out: *T, allocator:
                 return error.NotAnRLPList;
             }
 
-            var r = sizeAndDataOffset(serialized);
+            var r = try sizeAndDataOffset(serialized);
             // limit of the struct's rlp encoding inside the larger buffer
             const limit = r.offset + r.size;
             if (limit > serialized.len) {
@@ -105,7 +130,7 @@ pub fn deserialize(comptime T: type, serialized: []const u8, out: *T, allocator:
         },
         .Pointer => |ptr| switch (ptr.size) {
             .Slice => if (ptr.child == u8) {
-                var r = sizeAndDataOffset(serialized);
+                var r = try sizeAndDataOffset(serialized);
                 out.* = serialized[r.offset .. r.offset + r.size];
                 return r.offset + r.size;
             } else {
@@ -113,17 +138,18 @@ pub fn deserialize(comptime T: type, serialized: []const u8, out: *T, allocator:
                     return error.NotAnRLPList;
                 }
 
-                const r = sizeAndDataOffset(serialized);
+                const r = try sizeAndDataOffset(serialized);
                 var end = r.offset + r.size;
+
+                const list_size = try countRlpListItems(serialized[r.offset..end]);
 
                 // since it's not possible to say if the slice is "undefined", it has
                 // to be allocated regardless.
-                out.* = &[_]ptr.child{};
+                out.* = try allocator.alloc(ptr.child, list_size);
 
                 var offset = r.offset;
                 var i: usize = 0;
                 while (offset < end) : (i += 1) {
-                    out.* = try allocator.realloc(out.*, (i + 1));
                     offset += try deserialize(ptr.child, serialized[offset..], &out.*[i], allocator);
                 }
 
@@ -132,7 +158,7 @@ pub fn deserialize(comptime T: type, serialized: []const u8, out: *T, allocator:
             else => return error.UnSupportedType,
         },
         .Array => |ary| if (@sizeOf(ary.child) == 1) {
-            var r = sizeAndDataOffset(serialized);
+            var r = try sizeAndDataOffset(serialized);
             // this is a fixed-size array, so the destination has already been allocated.
             std.mem.copy(u8, out.*[0..], serialized[r.offset .. r.offset + r.size]);
             return r.offset + r.size;
