@@ -339,3 +339,12 @@ test "access list filled" {
     testing.allocator.free(out.access_list[0].storage_keys);
     testing.allocator.free(out.access_list);
 }
+
+test "one byte slice" {
+    var out = ArrayList(u8).init(testing.allocator);
+    defer out.deinit();
+    const bytes = [_]u8{0x00};
+
+    try serialize([]const u8, std.testing.allocator, &bytes, &out);
+    try std.testing.expectEqualSlices(u8, &[_]u8{0x00}, out.items);
+}
