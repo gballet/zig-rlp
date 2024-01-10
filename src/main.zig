@@ -109,7 +109,9 @@ pub fn serialize(comptime T: type, allocator: Allocator, data: T, list: *ArrayLi
                 .Slice => {
                     // Simple case: string
                     if (@sizeOf(ptr.child) == 1) {
-                        try list.append(128 + @as(u8, @truncate(data.len)));
+                        if (data.len != 1) {
+                            try list.append(128 + @as(u8, @truncate(data.len)));
+                        }
                         _ = try list.writer().write(data);
                     } else {
                         var tlist = ArrayList(u8).init(allocator);
