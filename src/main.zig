@@ -2,14 +2,15 @@ const std = @import("std");
 const testing = std.testing;
 const ArrayList = std.ArrayList;
 const Allocator = std.mem.Allocator;
-pub const deserialize = @import("deserialize.zig").deserialize;
 const hasFn = std.meta.trait.hasFn;
 
 const implementsRLP = hasFn("encodeToRLP");
 
+pub const deserialize = @import("deserialize.zig").deserialize;
+
 pub fn serialize(comptime T: type, allocator: Allocator, data: T, list: *ArrayList(u8)) !void {
     if (comptime implementsRLP(T)) {
-        return data.encodeToRLP(list);
+        return data.encodeToRLP(allocator, list);
     }
     const info = @typeInfo(T);
     return switch (info) {
@@ -138,7 +139,7 @@ pub fn serialize(comptime T: type, allocator: Allocator, data: T, list: *ArrayLi
                     }
                 },
                 .One => {
-                    try serialize(ptr.child, data.*, list);
+                    try serialize(ptr.child, allocator, data.*, list);
                 },
                 else => return error.UnsupportedType,
             }
@@ -285,7 +286,8 @@ const RLPEncodablePerson = struct {
     name: []const u8,
     age: u8,
 
-    pub fn encodeToRLP(self: RLPEncodablePerson, list: *ArrayList(u8)) !void {
+    pub fn encodeToRLP(self: RLPEncodablePerson, allocator: Allocator, list: *ArrayList(u8)) !void {
+        _ = allocator;
         _ = self;
         return list.append(42);
     }
@@ -330,7 +332,7 @@ test "access list filled" {
     var buf: [128]u8 = undefined;
     const rlp = try std.fmt.hexToBytes(&buf, "f83af838f7940000000000000000000000000000000000001210e1a00000000000000000000000000000000000000000000000000000000000000203");
     var out: StrippedTxn = undefined;
-    _ = try deserialize(StrippedTxn, rlp, &out, testing.allocator);
+    _ = try deserialize(StrippedTxn, testing.allocator, rlp, &out);
 
     const expected_address = [_]u8{0} ** 18 ++ [_]u8{ 0x12, 0x10 };
     try testing.expectEqual(out.access_list[0].address, expected_address);
