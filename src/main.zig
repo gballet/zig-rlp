@@ -109,7 +109,9 @@ pub fn serialize(comptime T: type, allocator: Allocator, data: T, list: *ArrayLi
                 .Slice => {
                     // Simple case: string
                     if (@sizeOf(ptr.child) == 1) {
-                        try list.append(128 + @as(u8, @truncate(data.len)));
+                        if (data.len != 1) {
+                            try list.append(128 + @as(u8, @truncate(data.len)));
+                        }
                         _ = try list.writer().write(data);
                     } else {
                         var tlist = ArrayList(u8).init(allocator);
@@ -338,4 +340,13 @@ test "access list filled" {
 
     testing.allocator.free(out.access_list[0].storage_keys);
     testing.allocator.free(out.access_list);
+}
+
+test "one byte slice" {
+    var out = ArrayList(u8).init(testing.allocator);
+    defer out.deinit();
+    const bytes = [_]u8{0x00};
+
+    try serialize([]const u8, std.testing.allocator, &bytes, &out);
+    try std.testing.expectEqualSlices(u8, &[_]u8{0x00}, out.items);
 }
