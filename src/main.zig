@@ -50,12 +50,11 @@ pub fn serialize(comptime T: type, allocator: Allocator, data: T, list: *ArrayLi
                             }
                         }
                         try list.append(183 + length_length);
-                        comptime var i = 0;
-                        comptime var length = @sizeOf(T);
-                        inline while (i < length_length) : (i += 1) {
-                            try list.append(@as(u8, @truncate(length)));
-                            length >>= 8;
-                        }
+
+                        var enc_length_buf: [8]u8 = undefined;
+                        std.mem.writeInt(usize, &enc_length_buf, @sizeOf(T), .Big);
+                        const enc_length = std.mem.trimLeft(u8, &enc_length_buf, &[_]u8{0});
+                        try list.appendSlice(enc_length);
                     },
                 }
                 _ = try list.writer().write(data[0..]);
@@ -94,14 +93,11 @@ pub fn serialize(comptime T: type, allocator: Allocator, data: T, list: *ArrayLi
             } else {
                 const index = list.items.len;
                 try list.append(0);
-                var length = tlist.items.len;
-                var length_length: u8 = 0;
-                while (length != 0) : (length >>= 8) {
-                    try list.append(@as(u8, @truncate(length)));
-                    length_length += 1;
-                }
-
-                list.items[index] = 247 + length_length;
+                var enc_length_buf: [8]u8 = undefined;
+                std.mem.writeInt(usize, &enc_length_buf, tlist.items.len, .Big);
+                const enc_length = std.mem.trimLeft(u8, &enc_length_buf, &[_]u8{0});
+                try list.appendSlice(enc_length);
+                list.items[index] = 247 + @as(u8, @intCast(enc_length.len));
             }
             _ = try list.writer().write(tlist.items);
         },
@@ -212,7 +208,7 @@ test "serialize a byte array" {
     list.clearRetainingCapacity();
     const src8x1K = [_]u8{0xab} ** 1024;
     try serialize(@TypeOf(src8x1K), testing.allocator, src8x1K, &list);
-    const expected8x1K = [_]u8{ 0xb9, 0x00, 0x04 } ++ [_]u8{0xab} ** 1024;
+    const expected8x1K = [_]u8{ 0xb9, 0x04, 0x00 } ++ [_]u8{0xab} ** 1024;
     try testing.expect(std.mem.eql(u8, list.items[0..], expected8x1K[0..]));
 }
 
