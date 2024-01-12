@@ -49,12 +49,11 @@ pub fn serialize(comptime T: type, allocator: Allocator, data: T, list: *ArrayLi
                             }
                         }
                         try list.append(183 + length_length);
-                        comptime var i = 0;
-                        comptime var length = @sizeOf(T);
-                        inline while (i < length_length) : (i += 1) {
-                            const shift = 8 * (length_length - 1 - i);
-                            try list.append(@as(u8, @truncate(length >> shift)));
-                        }
+
+                        var enc_length_buf: [8]u8 = undefined;
+                        std.mem.writeInt(usize, &enc_length_buf, @sizeOf(T), .Big);
+                        const enc_length = std.mem.trimLeft(u8, &enc_length_buf, &[_]u8{0});
+                        try list.appendSlice(enc_length);
                     },
                 }
                 _ = try list.writer().write(data[0..]);
