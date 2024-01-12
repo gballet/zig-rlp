@@ -110,7 +110,7 @@ pub fn serialize(comptime T: type, allocator: Allocator, data: T, list: *ArrayLi
                             0 => try list.append(128),
                             // if data.len == 1 and data[0] < 128, don't write the header
                             // the write after this switch will add the unprefixed data.
-                            1 => if (data[0] >= 128) try list.append(1),
+                            1 => if (data[0] >= 128) try list.append(129),
                             2...55 => try list.append(128 + @as(u8, @truncate(data.len))),
                             else => {
                                 const header_offset = list.items.len;
@@ -373,4 +373,22 @@ test "one byte slice" {
 
     try serialize([]const u8, std.testing.allocator, &bytes, &out);
     try std.testing.expectEqualSlices(u8, &[_]u8{0x00}, out.items);
+}
+
+test "one byte slicei with value == 128" {
+    var out = ArrayList(u8).init(testing.allocator);
+    defer out.deinit();
+    const bytes = [_]u8{0x80};
+
+    try serialize([]const u8, std.testing.allocator, &bytes, &out);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x81, 0x80 }, out.items);
+}
+
+test "one byte slicei with value > 128" {
+    var out = ArrayList(u8).init(testing.allocator);
+    defer out.deinit();
+    const bytes = [_]u8{0xff};
+
+    try serialize([]const u8, std.testing.allocator, &bytes, &out);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x81, 0xff }, out.items);
 }
