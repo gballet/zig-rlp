@@ -248,6 +248,22 @@ test "serialize a struct" {
     try testing.expect(std.mem.eql(u8, list.items[0..], expected[0..]));
 }
 
+test "serialize a struct with serialized length" {
+    var list = ArrayList(u8).init(testing.allocator);
+    defer list.deinit();
+    const Person = struct {
+        age: u8,
+        name: []const u8,
+    };
+    const dt = Person{ .age = 24, .name = "Daenerys Stormborn of the House Targaryen, First of Her Name, the Unburnt, Queen of the Andals and the First Men, Khaleesi of the Great Grass Sea, Breaker of Chains, and Mother of Dragons" };
+    try serialize(Person, testing.allocator, dt, &list);
+    const name_len = dt.name.len;
+    const name_len_lo = @as(u8, @truncate(name_len));
+    const name_len_hi = @as(u8, @truncate(name_len >> 8));
+    const expected = [_]u8{ 0xf9, name_len_lo + 2, name_len_hi, 24, 185, name_len_hi, name_len_lo } ++ dt.name;
+    try testing.expect(std.mem.eql(u8, list.items[0..], expected[0..]));
+}
+
 test "serialize a struct with functions" {
     var list = ArrayList(u8).init(testing.allocator);
     defer list.deinit();
