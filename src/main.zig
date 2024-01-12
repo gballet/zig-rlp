@@ -106,8 +106,21 @@ pub fn serialize(comptime T: type, allocator: Allocator, data: T, list: *ArrayLi
                 .Slice => {
                     // Simple case: string
                     if (@sizeOf(ptr.child) == 1) {
-                        if (data.len != 1) {
-                            try list.append(128 + @as(u8, @truncate(data.len)));
+                        switch (data.len) {
+                            0 => try list.append(128),
+                            // if data.len == 1 and data[0] < 128, don't write the header
+                            // the write after this switch will add the unprefixed data.
+                            1 => if (data[0] >= 128) try list.append(1),
+                            2...55 => try list.append(128 + @as(u8, @truncate(data.len))),
+                            else => {
+                                const header_offset = list.items.len;
+                                try list.append(0); // reserve space for the size header
+                                var enc_length_buf: [8]u8 = undefined;
+                                std.mem.writeInt(usize, &enc_length_buf, data.len, .Big);
+                                const enc_length = std.mem.trimLeft(u8, &enc_length_buf, &[_]u8{0});
+                                try list.appendSlice(enc_length);
+                                list.items[header_offset] = 183 + @as(u8, @truncate(enc_length.len));
+                            },
                         }
                         _ = try list.writer().write(data);
                     } else {
@@ -248,7 +261,7 @@ test "serialize a struct" {
     try testing.expect(std.mem.eql(u8, list.items[0..], expected[0..]));
 }
 
-test "serialize a struct with serialized length" {
+test "serialize a struct with serialized length > 56" {
     var list = ArrayList(u8).init(testing.allocator);
     defer list.deinit();
     const Person = struct {
@@ -257,10 +270,7 @@ test "serialize a struct with serialized length" {
     };
     const dt = Person{ .age = 24, .name = "Daenerys Stormborn of the House Targaryen, First of Her Name, the Unburnt, Queen of the Andals and the First Men, Khaleesi of the Great Grass Sea, Breaker of Chains, and Mother of Dragons" };
     try serialize(Person, testing.allocator, dt, &list);
-    const name_len = dt.name.len;
-    const name_len_lo = @as(u8, @truncate(name_len));
-    const name_len_hi = @as(u8, @truncate(name_len >> 8));
-    const expected = [_]u8{ 0xf9, name_len_lo + 2, name_len_hi, 24, 185, name_len_hi, name_len_lo } ++ dt.name;
+    const expected = [_]u8{ 0xf8, @as(u8, dt.name.len) + 3, 24, 184, @as(u8, dt.name.len) } ++ dt.name;
     try testing.expect(std.mem.eql(u8, list.items[0..], expected[0..]));
 }
 
