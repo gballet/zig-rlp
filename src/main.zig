@@ -8,6 +8,14 @@ const implementsRLP = hasFn("encodeToRLP");
 
 pub const deserialize = @import("deserialize.zig").deserialize;
 
+fn writeLengthLength(length: usize, list: *ArrayList(u8)) !u8 {
+    var enc_length_buf: [8]u8 = undefined;
+    std.mem.writeInt(usize, &enc_length_buf, length, .Big);
+    const enc_length = std.mem.trimLeft(u8, &enc_length_buf, &[_]u8{0});
+    try list.appendSlice(enc_length);
+    return @as(u8, @intCast(enc_length.len));
+}
+
 pub fn serialize(comptime T: type, allocator: Allocator, data: T, list: *ArrayList(u8)) !void {
     if (comptime implementsRLP(T)) {
         return data.encodeToRLP(allocator, list);
@@ -49,12 +57,9 @@ pub fn serialize(comptime T: type, allocator: Allocator, data: T, list: *ArrayLi
                                 length_length += 1;
                             }
                         }
-                        try list.append(183 + length_length);
 
-                        var enc_length_buf: [8]u8 = undefined;
-                        std.mem.writeInt(usize, &enc_length_buf, @sizeOf(T), .Big);
-                        const enc_length = std.mem.trimLeft(u8, &enc_length_buf, &[_]u8{0});
-                        try list.appendSlice(enc_length);
+                        try list.append(183 + length_length);
+                        _ = try writeLengthLength(@sizeOf(T), list);
                     },
                 }
                 _ = try list.writer().write(data[0..]);
@@ -71,12 +76,8 @@ pub fn serialize(comptime T: type, allocator: Allocator, data: T, list: *ArrayLi
                     const index = list.items.len;
                     try list.append(0);
                     var length = tlist.items.len;
-                    var length_length: u8 = 0;
-                    while (length != 0) : (length >>= 8) {
-                        try list.append(@as(u8, @truncate(length)));
-                        length_length += 1;
-                    }
 
+                    const length_length = try writeLengthLength(length, list);
                     list.items[index] = 183 + length_length;
                 }
                 _ = try list.writer().write(tlist.items);
@@ -93,11 +94,8 @@ pub fn serialize(comptime T: type, allocator: Allocator, data: T, list: *ArrayLi
             } else {
                 const index = list.items.len;
                 try list.append(0);
-                var enc_length_buf: [8]u8 = undefined;
-                std.mem.writeInt(usize, &enc_length_buf, tlist.items.len, .Big);
-                const enc_length = std.mem.trimLeft(u8, &enc_length_buf, &[_]u8{0});
-                try list.appendSlice(enc_length);
-                list.items[index] = 247 + @as(u8, @intCast(enc_length.len));
+                const length_length = try writeLengthLength(tlist.items.len, list);
+                list.items[index] = 247 + length_length;
             }
             _ = try list.writer().write(tlist.items);
         },
@@ -115,11 +113,8 @@ pub fn serialize(comptime T: type, allocator: Allocator, data: T, list: *ArrayLi
                             else => {
                                 const header_offset = list.items.len;
                                 try list.append(0); // reserve space for the size header
-                                var enc_length_buf: [8]u8 = undefined;
-                                std.mem.writeInt(usize, &enc_length_buf, data.len, .Big);
-                                const enc_length = std.mem.trimLeft(u8, &enc_length_buf, &[_]u8{0});
-                                try list.appendSlice(enc_length);
-                                list.items[header_offset] = 183 + @as(u8, @truncate(enc_length.len));
+                                const length_length = try writeLengthLength(data.len, list);
+                                list.items[header_offset] = 183 + length_length;
                             },
                         }
                         _ = try list.writer().write(data);
@@ -236,7 +231,7 @@ test "serialize a u16 array" {
     list.clearRetainingCapacity();
     const src16x1K = [_]u16{0xabcd} ** 1024;
     try serialize(@TypeOf(src16x1K), testing.allocator, src16x1K, &list);
-    const expected16x1K = [_]u8{ 0xb9, 0, 0x0C } ++ [_]u8{ 130, 0xab, 0xcd } ** 1024;
+    const expected16x1K = [_]u8{ 0xb9, 0x0C, 0 } ++ [_]u8{ 130, 0xab, 0xcd } ** 1024;
     try testing.expect(std.mem.eql(u8, list.items[0..], expected16x1K[0..]));
 }
 
