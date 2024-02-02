@@ -165,6 +165,22 @@ pub fn serialize(comptime T: type, allocator: Allocator, data: T, list: *ArrayLi
     };
 }
 
+const GenericRLPValue = union(enum) {
+    value: []const u8,
+    list: []const GenericRLPValue,
+
+    pub fn encodeToRLP(self: GenericRLPValue, allocator: Allocator, list: *std.ArrayList(u8)) !void {
+        return switch (self) {
+            .value => |v| {
+                try serialize([]const u8, allocator, v, list);
+            },
+            .list => |v| {
+                try serialize([]const GenericRLPValue, allocator, v, list);
+            },
+        };
+    }
+};
+
 test "serialize an integer" {
     var list = ArrayList(u8).init(testing.allocator);
     defer list.deinit();
@@ -386,4 +402,13 @@ test "one byte slicei with value > 128" {
 
     try serialize([]const u8, std.testing.allocator, &bytes, &out);
     try std.testing.expectEqualSlices(u8, &[_]u8{ 0x81, 0xff }, out.items);
+}
+
+test "generic rlp" {
+    var allocator = std.testing.allocator;
+    var out = ArrayList(u8).init(allocator);
+    defer out.deinit();
+
+    var foo: GenericRLPValue = .{ .value = "hello" };
+    try serialize(GenericRLPValue, allocator, foo, &out);
 }
