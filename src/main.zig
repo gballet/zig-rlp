@@ -78,7 +78,7 @@ pub fn serialize(comptime T: type, allocator: Allocator, data: T, list: *ArrayLi
                     var length = tlist.items.len;
 
                     const length_length = try writeLengthLength(length, list);
-                    list.items[index] = 183 + length_length;
+                    list.items[index] = 247 + length_length;
                 }
                 _ = try list.writer().write(tlist.items);
             }
@@ -137,7 +137,7 @@ pub fn serialize(comptime T: type, allocator: Allocator, data: T, list: *ArrayLi
                                 length_length += 1;
                             }
 
-                            list.items[index] = 183 + length_length;
+                            list.items[index] = 247 + length_length;
                         }
                         _ = try list.writer().write(tlist.items);
                     }
@@ -231,7 +231,7 @@ test "serialize a u16 array" {
     list.clearRetainingCapacity();
     const src16x1K = [_]u16{0xabcd} ** 1024;
     try serialize(@TypeOf(src16x1K), testing.allocator, src16x1K, &list);
-    const expected16x1K = [_]u8{ 0xb9, 0x0C, 0 } ++ [_]u8{ 130, 0xab, 0xcd } ** 1024;
+    const expected16x1K = [_]u8{ 0xf9, 0x0C, 0 } ++ [_]u8{ 130, 0xab, 0xcd } ** 1024;
     try testing.expect(std.mem.eql(u8, list.items[0..], expected16x1K[0..]));
 }
 
