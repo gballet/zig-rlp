@@ -71,7 +71,7 @@ pub fn serialize(comptime T: type, allocator: Allocator, data: T, list: *ArrayLi
                 }
 
                 if (tlist.items.len < 56) {
-                    try list.append(128 + @as(u8, @truncate(tlist.items.len)));
+                    try list.append(192 + @as(u8, @truncate(tlist.items.len)));
                 } else {
                     const index = list.items.len;
                     try list.append(0);
@@ -225,7 +225,7 @@ test "serialize a u16 array" {
     defer list.deinit();
     const src16 = [_]u16{ 0xabcd, 0xef01 };
     try serialize([2]u16, testing.allocator, src16, &list);
-    const expected16 = [_]u8{ 134, 130, 0xab, 0xcd, 130, 0xef, 0x01 };
+    const expected16 = [_]u8{ 198, 130, 0xab, 0xcd, 130, 0xef, 0x01 };
     try testing.expect(std.mem.eql(u8, list.items[0..], expected16[0..]));
 
     list.clearRetainingCapacity();
