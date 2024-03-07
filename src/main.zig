@@ -71,14 +71,14 @@ pub fn serialize(comptime T: type, allocator: Allocator, data: T, list: *ArrayLi
                 }
 
                 if (tlist.items.len < 56) {
-                    try list.append(128 + @as(u8, @truncate(tlist.items.len)));
+                    try list.append(192 + @as(u8, @truncate(tlist.items.len)));
                 } else {
                     const index = list.items.len;
                     try list.append(0);
                     var length = tlist.items.len;
 
                     const length_length = try writeLengthLength(length, list);
-                    list.items[index] = 183 + length_length;
+                    list.items[index] = 247 + length_length;
                 }
                 _ = try list.writer().write(tlist.items);
             }
@@ -137,7 +137,7 @@ pub fn serialize(comptime T: type, allocator: Allocator, data: T, list: *ArrayLi
                                 length_length += 1;
                             }
 
-                            list.items[index] = 183 + length_length;
+                            list.items[index] = 247 + length_length;
                         }
                         _ = try list.writer().write(tlist.items);
                     }
@@ -225,13 +225,13 @@ test "serialize a u16 array" {
     defer list.deinit();
     const src16 = [_]u16{ 0xabcd, 0xef01 };
     try serialize([2]u16, testing.allocator, src16, &list);
-    const expected16 = [_]u8{ 134, 130, 0xab, 0xcd, 130, 0xef, 0x01 };
+    const expected16 = [_]u8{ 198, 130, 0xab, 0xcd, 130, 0xef, 0x01 };
     try testing.expect(std.mem.eql(u8, list.items[0..], expected16[0..]));
 
     list.clearRetainingCapacity();
     const src16x1K = [_]u16{0xabcd} ** 1024;
     try serialize(@TypeOf(src16x1K), testing.allocator, src16x1K, &list);
-    const expected16x1K = [_]u8{ 0xb9, 0x0C, 0 } ++ [_]u8{ 130, 0xab, 0xcd } ** 1024;
+    const expected16x1K = [_]u8{ 0xf9, 0x0C, 0 } ++ [_]u8{ 130, 0xab, 0xcd } ** 1024;
     try testing.expect(std.mem.eql(u8, list.items[0..], expected16x1K[0..]));
 }
 
