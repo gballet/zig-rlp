@@ -16,7 +16,7 @@ fn writeLengthLength(length: usize, list: *ArrayList(u8)) !u8 {
     return @as(u8, @intCast(enc_length.len));
 }
 
-const SerializationError = error{
+pub const SerializationError = error{
     UnsupportedType,
     OutOfMemory,
 };
