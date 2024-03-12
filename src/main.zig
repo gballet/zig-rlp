@@ -130,12 +130,7 @@ pub fn serialize(comptime T: type, allocator: Allocator, data: T, list: *ArrayLi
                         } else {
                             const index = list.items.len;
                             try list.append(0);
-                            var length = tlist.items.len;
-                            var length_length: u8 = 0;
-                            while (length != 0) : (length >>= 8) {
-                                try list.append(@as(u8, @truncate(length)));
-                                length_length += 1;
-                            }
+                            var length_length: u8 = try writeLengthLength(tlist.items.len, list);
 
                             list.items[index] = 247 + length_length;
                         }
