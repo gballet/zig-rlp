@@ -185,7 +185,9 @@ pub fn deserialize(comptime T: type, allocator: Allocator, serialized: []const u
             if (serialized.len == 0 or serialized[0] == rlpByteListShortHeader or serialized[0] == rlpListLongHeader) {
                 out.* = null;
                 // 0 if serialized was empty, one in the case of an empty list
-                return serialized.len;
+                if (serialized.len == 0)
+                    return 0;
+                return 1;
             } else {
                 var t: opt.child = undefined;
                 const offset = try deserialize(opt.child, allocator, serialized[0..], &t);
