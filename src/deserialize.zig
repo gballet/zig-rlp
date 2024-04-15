@@ -39,6 +39,7 @@ inline fn safeReadSliceIntBig(comptime T: type, payload: []const u8, out: *T) vo
 // Returns the size of the payload as well as the offset to the
 // start of the actual data.
 fn sizeAndDataOffset(payload: []const u8) !struct { size: usize, offset: usize } {
+    std.debug.print("pailoud: {s}\n", .{std.fmt.fmtSliceHexLower(payload)});
     var size: usize = undefined;
     var offset: usize = undefined;
 
