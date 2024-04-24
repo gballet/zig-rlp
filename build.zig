@@ -1,10 +1,10 @@
-const Builder = @import("std").build.Builder;
+const Build = @import("std").Build;
 
-pub fn build(b: *Builder) void {
+pub fn build(b: *Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    _ = b.addModule("rlp", Builder.CreateModuleOptions{ .source_file = .{ .path = "src/main.zig" } });
+    _ = b.addModule("rlp", Build.Module.CreateOptions{ .root_source_file = .{ .path = "src/main.zig" } });
 
     const lib = b.addStaticLibrary(.{
         .name = "zig-rlp",
