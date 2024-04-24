@@ -3,7 +3,7 @@ const serialize = @import("main.zig").serialize;
 const expect = std.testing.expect;
 const expectError = std.testing.expectError;
 const eql = std.mem.eql;
-const readIntSliceBig = std.mem.readIntSliceBig;
+const readInt = std.mem.readInt;
 const ArrayList = std.ArrayList;
 const hasFn = std.meta.hasFn;
 const Allocator = std.mem.Allocator;
@@ -16,7 +16,7 @@ const rlpListLongHeader = 247;
 // When reading the payload, leading zeros are removed, so there might be a
 // difference in byte-size between the number of bytes and the target integer.
 // If so, the bytes have to be extracted into a temporary value.
-inline fn safeReadSliceIntBig(comptime T: type, payload: []const u8, out: *T) void {
+inline fn safeReadSliceIntBig(comptime T: type, payload: []const u8, out: *T) !void {
     // compile time constat to activate the first branch. If
     // @sizeOf(T) > 1, then it is possible (and necessary) to
     // shift temp.
@@ -30,7 +30,8 @@ inline fn safeReadSliceIntBig(comptime T: type, payload: []const u8, out: *T) vo
         }
         out.* = temp;
     } else {
-        out.* = readIntSliceBig(T, payload[0..]);
+        var bs = std.io.fixedBufferStream(payload[0..]);
+        out.* = try bs.reader().readInt(T, .big);
     }
 }
 
@@ -57,7 +58,7 @@ fn sizeAndDataOffset(payload: []const u8) !struct { size: usize, offset: usize }
             return error.RlpPayloadTooShort;
         }
 
-        safeReadSliceIntBig(usize, payload[1 .. 1 + size_size], &size);
+        try safeReadSliceIntBig(usize, payload[1 .. 1 + size_size], &size);
         offset = 1 + size_size;
     } else if (payload[0] <= rlpListLongHeader) {
         size = @as(usize, payload[0] - rlpListShortHeader);
@@ -69,7 +70,7 @@ fn sizeAndDataOffset(payload: []const u8) !struct { size: usize, offset: usize }
             return error.RlpPayloadTooShort;
         }
 
-        safeReadSliceIntBig(usize, payload[1 .. 1 + size_size], &size);
+        try safeReadSliceIntBig(usize, payload[1 .. 1 + size_size], &size);
         offset = 1 + size_size;
     }
     return .{ .size = size, .offset = offset };
@@ -96,7 +97,7 @@ pub fn deserialize(comptime T: type, allocator: Allocator, serialized: []const u
     return switch (info) {
         .Int => {
             const r = try sizeAndDataOffset(serialized);
-            safeReadSliceIntBig(T, serialized[r.offset .. r.offset + r.size], out);
+            try safeReadSliceIntBig(T, serialized[r.offset .. r.offset + r.size], out);
             return r.offset + r.size;
         },
         .Struct => |struc| {
@@ -163,7 +164,7 @@ pub fn deserialize(comptime T: type, allocator: Allocator, serialized: []const u
         .Array => |ary| if (@sizeOf(ary.child) == 1) {
             const r = try sizeAndDataOffset(serialized);
             // this is a fixed-size array, so the destination has already been allocated.
-            std.mem.copy(u8, out.*[0..], serialized[r.offset .. r.offset + r.size]);
+            std.mem.copyForwards(u8, out.*[0..], serialized[r.offset .. r.offset + r.size]);
             return r.offset + r.size;
         } else return error.UnsupportedType,
         .Optional => |opt| {
