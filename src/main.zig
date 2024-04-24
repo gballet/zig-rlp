@@ -2,22 +2,20 @@ const std = @import("std");
 const testing = std.testing;
 const ArrayList = std.ArrayList;
 const Allocator = std.mem.Allocator;
-const hasFn = std.meta.trait.hasFn;
-
-const implementsRLP = hasFn("encodeToRLP");
+const hasFn = std.meta.hasFn;
 
 pub const deserialize = @import("deserialize.zig").deserialize;
 
 fn writeLengthLength(length: usize, list: *ArrayList(u8)) !u8 {
     var enc_length_buf: [8]u8 = undefined;
-    std.mem.writeInt(usize, &enc_length_buf, length, .Big);
+    std.mem.writeInt(usize, &enc_length_buf, length, .big);
     const enc_length = std.mem.trimLeft(u8, &enc_length_buf, &[_]u8{0});
     try list.appendSlice(enc_length);
     return @as(u8, @intCast(enc_length.len));
 }
 
 pub fn serialize(comptime T: type, allocator: Allocator, data: T, list: *ArrayList(u8)) !void {
-    if (comptime implementsRLP(T)) {
+    if (comptime hasFn(T, "encodeToRLP")) {
         return data.encodeToRLP(allocator, list);
     }
     const info = @typeInfo(T);
@@ -31,7 +29,7 @@ pub fn serialize(comptime T: type, allocator: Allocator, data: T, list: *ArrayLi
                 // be left-trimmed.
                 var tlist = ArrayList(u8).init(list.allocator);
                 defer tlist.deinit();
-                try tlist.writer().writeIntBig(T, data);
+                try tlist.writer().writeInt(T, data, .big);
                 var start_offset: usize = 0; // note that only numbers up to 255 will work
                 while (tlist.items[start_offset] == 0) : (start_offset += 1) {}
 
@@ -75,7 +73,7 @@ pub fn serialize(comptime T: type, allocator: Allocator, data: T, list: *ArrayLi
                 } else {
                     const index = list.items.len;
                     try list.append(0);
-                    var length = tlist.items.len;
+                    const length = tlist.items.len;
 
                     const length_length = try writeLengthLength(length, list);
                     list.items[index] = 247 + length_length;
@@ -130,7 +128,7 @@ pub fn serialize(comptime T: type, allocator: Allocator, data: T, list: *ArrayLi
                         } else {
                             const index = list.items.len;
                             try list.append(0);
-                            var length_length: u8 = try writeLengthLength(tlist.items.len, list);
+                            const length_length: u8 = try writeLengthLength(tlist.items.len, list);
 
                             list.items[index] = 247 + length_length;
                         }
