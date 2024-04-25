@@ -403,11 +403,11 @@ test "one byte slicei with value > 128" {
 }
 
 test "generic rlp" {
-    var allocator = std.testing.allocator;
+    const allocator = std.testing.allocator;
     {
         var out_generic = ArrayList(u8).init(allocator);
         defer out_generic.deinit();
-        var generic: RawRLPValue = .{ .value = "hello" };
+        const generic: RawRLPValue = .{ .value = "hello" };
         try serialize(RawRLPValue, allocator, generic, &out_generic);
 
         var out = ArrayList(u8).init(allocator);
@@ -420,7 +420,7 @@ test "generic rlp" {
     {
         var out_generic = ArrayList(u8).init(allocator);
         defer out_generic.deinit();
-        var generic: RawRLPValue = .{ .list = &[_]RawRLPValue{ .{ .value = "hello" }, .{ .value = "world" } } };
+        const generic: RawRLPValue = .{ .list = &[_]RawRLPValue{ .{ .value = "hello" }, .{ .value = "world" } } };
         try serialize(RawRLPValue, allocator, generic, &out_generic);
 
         var out = ArrayList(u8).init(allocator);
@@ -433,7 +433,7 @@ test "generic rlp" {
     {
         var out_generic = ArrayList(u8).init(allocator);
         defer out_generic.deinit();
-        var generic: RawRLPValue = .{
+        const generic: RawRLPValue = .{
             .list = &[_]RawRLPValue{
                 .{ .value = "hello" },
                 .{ .value = "world" },
@@ -444,7 +444,7 @@ test "generic rlp" {
 
         var out = ArrayList(u8).init(allocator);
         defer out.deinit();
-        var normal: struct { a: []const u8, b: []const u8, c: []const []const u8 } = .{
+        const normal: struct { a: []const u8, b: []const u8, c: []const []const u8 } = .{
             .a = "hello",
             .b = "world",
             .c = &[_][]const u8{"nested"},
