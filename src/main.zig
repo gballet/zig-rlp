@@ -402,7 +402,7 @@ test "one byte slicei with value > 128" {
     try std.testing.expectEqualSlices(u8, &[_]u8{ 0x81, 0xff }, out.items);
 }
 
-test "generic rlp" {
+test "raw rlp" {
     const allocator = std.testing.allocator;
     {
         var out_generic = ArrayList(u8).init(allocator);
