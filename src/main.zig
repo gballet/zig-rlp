@@ -14,7 +14,12 @@ fn writeLengthLength(length: usize, list: *ArrayList(u8)) !u8 {
     return @as(u8, @intCast(enc_length.len));
 }
 
-pub fn serialize(comptime T: type, allocator: Allocator, data: T, list: *ArrayList(u8)) !void {
+pub const SerializationError = error{
+    UnsupportedType,
+    OutOfMemory,
+};
+
+pub fn serialize(comptime T: type, allocator: Allocator, data: T, list: *ArrayList(u8)) SerializationError!void {
     if (comptime hasFn(T, "encodeToRLP")) {
         return data.encodeToRLP(allocator, list);
     }
@@ -157,6 +162,22 @@ pub fn serialize(comptime T: type, allocator: Allocator, data: T, list: *ArrayLi
         else => return error.UnsupportedType,
     };
 }
+
+const RawRLPValue = union(enum) {
+    value: []const u8,
+    list: []const RawRLPValue,
+
+    pub fn encodeToRLP(self: RawRLPValue, allocator: Allocator, list: *std.ArrayList(u8)) !void {
+        return switch (self) {
+            .value => |v| {
+                try serialize([]const u8, allocator, v, list);
+            },
+            .list => |v| {
+                try serialize([]const RawRLPValue, allocator, v, list);
+            },
+        };
+    }
+};
 
 test "serialize an integer" {
     var list = ArrayList(u8).init(testing.allocator);
@@ -379,4 +400,57 @@ test "one byte slicei with value > 128" {
 
     try serialize([]const u8, std.testing.allocator, &bytes, &out);
     try std.testing.expectEqualSlices(u8, &[_]u8{ 0x81, 0xff }, out.items);
+}
+
+test "raw rlp" {
+    const allocator = std.testing.allocator;
+    {
+        var out_generic = ArrayList(u8).init(allocator);
+        defer out_generic.deinit();
+        const generic: RawRLPValue = .{ .value = "hello" };
+        try serialize(RawRLPValue, allocator, generic, &out_generic);
+
+        var out = ArrayList(u8).init(allocator);
+        defer out.deinit();
+        const normal = "hello";
+        try serialize([]const u8, allocator, normal, &out);
+
+        try std.testing.expectEqualSlices(u8, out.items, out_generic.items);
+    }
+    {
+        var out_generic = ArrayList(u8).init(allocator);
+        defer out_generic.deinit();
+        const generic: RawRLPValue = .{ .list = &[_]RawRLPValue{ .{ .value = "hello" }, .{ .value = "world" } } };
+        try serialize(RawRLPValue, allocator, generic, &out_generic);
+
+        var out = ArrayList(u8).init(allocator);
+        defer out.deinit();
+        var normal = [_][]const u8{ "hello", "world" };
+        try serialize([]const []const u8, allocator, &normal, &out);
+
+        try std.testing.expectEqualSlices(u8, out.items, out_generic.items);
+    }
+    {
+        var out_generic = ArrayList(u8).init(allocator);
+        defer out_generic.deinit();
+        const generic: RawRLPValue = .{
+            .list = &[_]RawRLPValue{
+                .{ .value = "hello" },
+                .{ .value = "world" },
+                .{ .list = &[_]RawRLPValue{.{ .value = "nested" }} },
+            },
+        };
+        try serialize(RawRLPValue, allocator, generic, &out_generic);
+
+        var out = ArrayList(u8).init(allocator);
+        defer out.deinit();
+        const normal: struct { a: []const u8, b: []const u8, c: []const []const u8 } = .{
+            .a = "hello",
+            .b = "world",
+            .c = &[_][]const u8{"nested"},
+        };
+        try serialize(@TypeOf(normal), allocator, normal, &out);
+
+        try std.testing.expectEqualSlices(u8, out.items, out_generic.items);
+    }
 }
