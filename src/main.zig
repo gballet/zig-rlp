@@ -163,17 +163,17 @@ pub fn serialize(comptime T: type, allocator: Allocator, data: T, list: *ArrayLi
     };
 }
 
-const GenericRLPValue = union(enum) {
+const RawRLPValue = union(enum) {
     value: []const u8,
-    list: []const GenericRLPValue,
+    list: []const RawRLPValue,
 
-    pub fn encodeToRLP(self: GenericRLPValue, allocator: Allocator, list: *std.ArrayList(u8)) !void {
+    pub fn encodeToRLP(self: RawRLPValue, allocator: Allocator, list: *std.ArrayList(u8)) !void {
         return switch (self) {
             .value => |v| {
                 try serialize([]const u8, allocator, v, list);
             },
             .list => |v| {
-                try serialize([]const GenericRLPValue, allocator, v, list);
+                try serialize([]const RawRLPValue, allocator, v, list);
             },
         };
     }
@@ -407,8 +407,8 @@ test "generic rlp" {
     {
         var out_generic = ArrayList(u8).init(allocator);
         defer out_generic.deinit();
-        var generic: GenericRLPValue = .{ .value = "hello" };
-        try serialize(GenericRLPValue, allocator, generic, &out_generic);
+        var generic: RawRLPValue = .{ .value = "hello" };
+        try serialize(RawRLPValue, allocator, generic, &out_generic);
 
         var out = ArrayList(u8).init(allocator);
         defer out.deinit();
@@ -420,8 +420,8 @@ test "generic rlp" {
     {
         var out_generic = ArrayList(u8).init(allocator);
         defer out_generic.deinit();
-        var generic: GenericRLPValue = .{ .list = &[_]GenericRLPValue{ .{ .value = "hello" }, .{ .value = "world" } } };
-        try serialize(GenericRLPValue, allocator, generic, &out_generic);
+        var generic: RawRLPValue = .{ .list = &[_]RawRLPValue{ .{ .value = "hello" }, .{ .value = "world" } } };
+        try serialize(RawRLPValue, allocator, generic, &out_generic);
 
         var out = ArrayList(u8).init(allocator);
         defer out.deinit();
@@ -433,14 +433,14 @@ test "generic rlp" {
     {
         var out_generic = ArrayList(u8).init(allocator);
         defer out_generic.deinit();
-        var generic: GenericRLPValue = .{
-            .list = &[_]GenericRLPValue{
+        var generic: RawRLPValue = .{
+            .list = &[_]RawRLPValue{
                 .{ .value = "hello" },
                 .{ .value = "world" },
-                .{ .list = &[_]GenericRLPValue{.{ .value = "nested" }} },
+                .{ .list = &[_]RawRLPValue{.{ .value = "nested" }} },
             },
         };
-        try serialize(GenericRLPValue, allocator, generic, &out_generic);
+        try serialize(RawRLPValue, allocator, generic, &out_generic);
 
         var out = ArrayList(u8).init(allocator);
         defer out.deinit();
