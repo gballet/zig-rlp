@@ -1,5 +1,5 @@
 const std = @import("std");
-const serialize = @import("main.zig").serialize;
+const serialize = @import("serialize.zig").serialize;
 const expect = std.testing.expect;
 const expectError = std.testing.expectError;
 const eql = std.mem.eql;

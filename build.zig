@@ -4,18 +4,22 @@ pub fn build(b: *Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    _ = b.addModule("rlp", Build.Module.CreateOptions{ .root_source_file = .{ .cwd_relative = "src/main.zig" } });
+    _ = b.addModule("zig-rlp", Build.Module.CreateOptions{
+        .root_source_file = b.path("src/rlp.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
 
     const lib = b.addStaticLibrary(.{
         .name = "zig-rlp",
-        .root_source_file = .{ .cwd_relative = "src/main.zig" },
+        .root_source_file = .{ .cwd_relative = "src/serialize.zig" },
         .target = target,
         .optimize = optimize,
     });
     b.installArtifact(lib);
 
     var main_tests = b.addRunArtifact(b.addTest(.{
-        .root_source_file = .{ .cwd_relative = "src/main.zig" },
+        .root_source_file = .{ .cwd_relative = "src/serialize.zig" },
         .target = target,
         .optimize = optimize,
     }));
