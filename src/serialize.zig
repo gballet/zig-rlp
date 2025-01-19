@@ -32,7 +32,7 @@ pub fn serialize(comptime T: type, allocator: Allocator, data: T, list: *ArrayLi
             else => {
                 // write integer to temp buffer so that it can
                 // be left-trimmed.
-                var tlist = ArrayList(u8).init(list.allocator);
+                var tlist = ArrayList(u8).init(allocator);
                 defer tlist.deinit();
                 try tlist.writer().writeInt(T, data, .big);
                 var start_offset: usize = 0; // note that only numbers up to 255 will work
