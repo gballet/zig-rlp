@@ -25,7 +25,7 @@ pub fn serialize(comptime T: type, allocator: Allocator, data: T, list: *ArrayLi
     }
     const info = @typeInfo(T);
     return switch (info) {
-        .Int => switch (data) {
+        .int => switch (data) {
             0 => list.append(0x80),
             1...127 => list.append(@truncate(data)),
 
@@ -43,9 +43,9 @@ pub fn serialize(comptime T: type, allocator: Allocator, data: T, list: *ArrayLi
                 _ = try list.writer().write(tlist.items[start_offset..]);
             },
         },
-        .Array => {
+        .array => {
             // shortcut for byte lists
-            if (@sizeOf(info.Array.child) == 1) {
+            if (@sizeOf(info.array.child) == 1) {
                 switch (data.len) {
                     0 => try list.append(128),
                     1 => if (data[0] >= 128) {
@@ -70,7 +70,7 @@ pub fn serialize(comptime T: type, allocator: Allocator, data: T, list: *ArrayLi
                 var tlist = ArrayList(u8).init(allocator);
                 defer tlist.deinit();
                 for (data) |item| {
-                    try serialize(info.Array.child, allocator, item, &tlist);
+                    try serialize(info.array.child, allocator, item, &tlist);
                 }
 
                 if (tlist.items.len < 56) {
@@ -86,7 +86,7 @@ pub fn serialize(comptime T: type, allocator: Allocator, data: T, list: *ArrayLi
                 _ = try list.writer().write(tlist.items);
             }
         },
-        .Struct => |sinfo| {
+        .@"struct" => |sinfo| {
             var tlist = ArrayList(u8).init(allocator);
             defer tlist.deinit();
             inline for (sinfo.fields) |field| {
@@ -102,9 +102,9 @@ pub fn serialize(comptime T: type, allocator: Allocator, data: T, list: *ArrayLi
             }
             _ = try list.writer().write(tlist.items);
         },
-        .Pointer => |ptr| {
+        .pointer => |ptr| {
             switch (ptr.size) {
-                .Slice => {
+                .slice => {
                     // Simple case: string
                     if (@sizeOf(ptr.child) == 1) {
                         switch (data.len) {
@@ -140,23 +140,23 @@ pub fn serialize(comptime T: type, allocator: Allocator, data: T, list: *ArrayLi
                         _ = try list.writer().write(tlist.items);
                     }
                 },
-                .One => {
+                .one => {
                     try serialize(ptr.child, allocator, data.*, list);
                 },
                 else => return error.UnsupportedType,
             }
         },
-        .Optional => |opt| {
+        .optional => |opt| {
             if (data == null) {
                 try list.append(0x80);
             } else {
                 try serialize(opt.child, allocator, data.?, list);
             }
         },
-        .Null => {
+        .null => {
             try list.append(0x80);
         },
-        .Bool => {
+        .bool => {
             try list.append(if (data) 1 else 0);
         },
         else => return error.UnsupportedType,

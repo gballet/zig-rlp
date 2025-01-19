@@ -96,12 +96,12 @@ pub fn deserialize(comptime T: type, allocator: Allocator, serialized: []const u
 
     const info = @typeInfo(T);
     return switch (info) {
-        .Int => {
+        .int => {
             const r = try sizeAndDataOffset(serialized);
             try safeReadSliceIntBig(T, serialized[r.offset .. r.offset + r.size], out);
             return r.offset + r.size;
         },
-        .Struct => |struc| {
+        .@"struct" => |struc| {
             if (serialized.len == 0) {
                 return error.EOF;
             }
@@ -128,8 +128,8 @@ pub fn deserialize(comptime T: type, allocator: Allocator, serialized: []const u
 
             return limit;
         },
-        .Pointer => |ptr| switch (ptr.size) {
-            .Slice => if (ptr.child == u8) {
+        .pointer => |ptr| switch (ptr.size) {
+            .slice => if (ptr.child == u8) {
                 const r = try sizeAndDataOffset(serialized);
                 out.* = serialized[r.offset .. r.offset + r.size];
                 return r.offset + r.size;
@@ -155,20 +155,20 @@ pub fn deserialize(comptime T: type, allocator: Allocator, serialized: []const u
 
                 return end;
             },
-            .One => {
+            .one => {
                 out.* = try allocator.create(ptr.child);
                 return deserialize(ptr.child, allocator, serialized, out.*);
             },
             // TODO missing: Many, C
             else => return error.UnSupportedType,
         },
-        .Array => |ary| if (@sizeOf(ary.child) == 1) {
+        .array => |ary| if (@sizeOf(ary.child) == 1) {
             const r = try sizeAndDataOffset(serialized);
             // this is a fixed-size array, so the destination has already been allocated.
             std.mem.copyForwards(u8, out.*[0..], serialized[r.offset .. r.offset + r.size]);
             return r.offset + r.size;
         } else return error.UnsupportedType,
-        .Optional => |opt| {
+        .optional => |opt| {
             // There are two types of optional: those in the
             // middle of a structure, that MUST be represented
             // by an empty field (0x80) and those who are at
@@ -392,10 +392,11 @@ test "access list empty" {
 test "deserialize a byte slice" {
     var buf: [128]u8 = undefined;
     const rlp = try std.fmt.hexToBytes(&buf, "940000000000000000000000000000000000001210");
-    var out = [_]u8{0} ** 20;
-    var out_: []u8 = out[0..];
+    // Note that the byte slice is not copied.
+    var out: []const u8 = undefined;
 
-    _ = try deserialize([]const u8, std.testing.allocator, rlp, &out_);
+    _ = try deserialize([]const u8, std.testing.allocator, rlp, &out);
+    try std.testing.expect(std.mem.eql(u8, "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x12\x10", out));
 }
 
 test "deserialize a pointer to an integer" {
