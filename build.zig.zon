@@ -1,5 +1,6 @@
 .{
-    .name = "zig-rlp",
+    .name = .rlp,
+    .fingerprint = 0x317930bbb4092dee,
     .version = "0.1.0",
     .paths = .{""},
 }
