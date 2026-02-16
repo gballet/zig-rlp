@@ -4,7 +4,7 @@ const expect = std.testing.expect;
 const expectError = std.testing.expectError;
 const eql = std.mem.eql;
 const readInt = std.mem.readInt;
-const ArrayList = std.ArrayList;
+const ArrayList = std.array_list.Managed;
 const hasFn = std.meta.hasFn;
 const Allocator = std.mem.Allocator;
 
@@ -392,7 +392,6 @@ test "access list empty" {
 test "deserialize a byte slice" {
     var buf: [128]u8 = undefined;
     const rlp = try std.fmt.hexToBytes(&buf, "940000000000000000000000000000000000001210");
-    // Note that the byte slice is not copied.
     var out: []const u8 = undefined;
 
     _ = try deserialize([]const u8, std.testing.allocator, rlp, &out);

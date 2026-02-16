@@ -10,23 +10,30 @@ pub fn build(b: *Build) void {
         .optimize = optimize,
     });
 
-    const lib = b.addStaticLibrary(.{
+    const lib = b.addLibrary(.{
         .name = "zig-rlp",
-        .root_source_file = .{ .cwd_relative = "src/serialize.zig" },
-        .target = target,
-        .optimize = optimize,
+        .root_module = b.createModule(.{ 
+            .root_source_file = b.path("src/serialize.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+        .linkage = .static,
     });
     b.installArtifact(lib);
 
     var main_tests = b.addRunArtifact(b.addTest(.{
-        .root_source_file = .{ .cwd_relative = "src/serialize.zig" },
-        .target = target,
-        .optimize = optimize,
+        .root_module = b.createModule(.{ 
+            .root_source_file = b.path("src/serialize.zig"),
+            .target = target, 
+            .optimize = optimize 
+        }),
     }));
     var deser_tests = b.addRunArtifact(b.addTest(.{
-        .root_source_file = .{ .cwd_relative = "src/deserialize.zig" },
-        .target = target,
-        .optimize = optimize,
+        .root_module = b.createModule(.{ 
+            .root_source_file = b.path("src/deserialize.zig"),
+            .target = target, 
+            .optimize = optimize 
+        }),
     }));
 
     const test_step = b.step("test", "Run library tests");
