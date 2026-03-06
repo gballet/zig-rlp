@@ -1,6 +1,6 @@
 const std = @import("std");
 const testing = std.testing;
-const ArrayList = std.ArrayList;
+const ArrayList = std.array_list.Managed;
 const Allocator = std.mem.Allocator;
 const hasFn = std.meta.hasFn;
 
@@ -32,7 +32,7 @@ pub fn serialize(comptime T: type, allocator: Allocator, data: T, list: *ArrayLi
             else => {
                 // write integer to temp buffer so that it can
                 // be left-trimmed.
-                var tlist = ArrayList(u8).init(allocator);
+                var tlist = ArrayList(u8).init(list.allocator);
                 defer tlist.deinit();
                 try tlist.writer().writeInt(T, data, .big);
                 var start_offset: usize = 0; // note that only numbers up to 255 will work
@@ -167,7 +167,7 @@ const RawRLPValue = union(enum) {
     value: []const u8,
     list: []const RawRLPValue,
 
-    pub fn encodeToRLP(self: RawRLPValue, allocator: Allocator, list: *std.ArrayList(u8)) !void {
+    pub fn encodeToRLP(self: RawRLPValue, allocator: Allocator, list: *ArrayList(u8)) !void {
         return switch (self) {
             .value => |v| {
                 try serialize([]const u8, allocator, v, list);
