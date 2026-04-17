@@ -2,5 +2,6 @@
     .name = .rlp,
     .fingerprint = 0x317930bbb4092dee,
     .version = "0.1.0",
+    .minimum_zig_version = "0.16.0",
     .paths = .{""},
 }

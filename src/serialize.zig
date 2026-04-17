@@ -9,7 +9,7 @@ pub const deserialize = @import("deserialize.zig").deserialize;
 fn writeLengthLength(length: usize, list: *ArrayList(u8)) !u8 {
     var enc_length_buf: [8]u8 = undefined;
     std.mem.writeInt(usize, &enc_length_buf, length, .big);
-    const enc_length = std.mem.trimLeft(u8, &enc_length_buf, &[_]u8{0});
+    const enc_length = std.mem.trimStart(u8, &enc_length_buf, &[_]u8{0});
     try list.appendSlice(enc_length);
     return @as(u8, @intCast(enc_length.len));
 }
@@ -32,15 +32,17 @@ pub fn serialize(comptime T: type, allocator: Allocator, data: T, list: *ArrayLi
             else => {
                 // write integer to temp buffer so that it can
                 // be left-trimmed.
+                var int_buf: [@sizeOf(T)]u8 = undefined;
+                std.mem.writeInt(T, &int_buf, data, .big);
                 var tlist = ArrayList(u8).init(list.allocator);
                 defer tlist.deinit();
-                try tlist.writer().writeInt(T, data, .big);
+                try tlist.appendSlice(&int_buf);
                 var start_offset: usize = 0; // note that only numbers up to 255 will work
                 while (tlist.items[start_offset] == 0) : (start_offset += 1) {}
 
                 // copy final header + trimmed data
                 try list.append(@as(u8, @truncate(128 + tlist.items.len - start_offset)));
-                _ = try list.writer().write(tlist.items[start_offset..]);
+                _ = try list.appendSlice(tlist.items[start_offset..]);
             },
         },
         .array => {
@@ -65,7 +67,7 @@ pub fn serialize(comptime T: type, allocator: Allocator, data: T, list: *ArrayLi
                         _ = try writeLengthLength(@sizeOf(T), list);
                     },
                 }
-                _ = try list.writer().write(data[0..]);
+                _ = try list.appendSlice(data[0..]);
             } else {
                 var tlist = ArrayList(u8).init(allocator);
                 defer tlist.deinit();
@@ -83,7 +85,7 @@ pub fn serialize(comptime T: type, allocator: Allocator, data: T, list: *ArrayLi
                     const length_length = try writeLengthLength(length, list);
                     list.items[index] = 247 + length_length;
                 }
-                _ = try list.writer().write(tlist.items);
+                _ = try list.appendSlice(tlist.items);
             }
         },
         .@"struct" => |sinfo| {
@@ -100,7 +102,7 @@ pub fn serialize(comptime T: type, allocator: Allocator, data: T, list: *ArrayLi
                 const length_length = try writeLengthLength(tlist.items.len, list);
                 list.items[index] = 247 + length_length;
             }
-            _ = try list.writer().write(tlist.items);
+            _ = try list.appendSlice(tlist.items);
         },
         .pointer => |ptr| {
             switch (ptr.size) {
@@ -120,7 +122,7 @@ pub fn serialize(comptime T: type, allocator: Allocator, data: T, list: *ArrayLi
                                 list.items[header_offset] = 183 + length_length;
                             },
                         }
-                        _ = try list.writer().write(data);
+                        _ = try list.appendSlice(data);
                     } else {
                         var tlist = ArrayList(u8).init(allocator);
                         defer tlist.deinit();
@@ -137,7 +139,7 @@ pub fn serialize(comptime T: type, allocator: Allocator, data: T, list: *ArrayLi
 
                             list.items[index] = 247 + length_length;
                         }
-                        _ = try list.writer().write(tlist.items);
+                        _ = try list.appendSlice(tlist.items);
                     }
                 },
                 .one => {

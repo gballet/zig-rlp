@@ -30,8 +30,7 @@ inline fn safeReadSliceIntBig(comptime T: type, payload: []const u8, out: *T) !v
         }
         out.* = temp;
     } else {
-        var bs = std.io.fixedBufferStream(payload[0..]);
-        out.* = try bs.reader().readInt(T, .big);
+        out.* = std.mem.readInt(T, payload[0..@sizeOf(T)], .big);
     }
 }
 
