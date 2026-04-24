@@ -47,7 +47,7 @@ fn sizeAndDataOffset(payload: []const u8) !struct { size: usize, offset: usize }
     if (payload[0] < rlpByteListShortHeader) {
         offset = 0;
         size = 1;
-    } else if (payload[0] < rlpByteListLongHeader) {
+    } else if (payload[0] <= rlpByteListLongHeader) {
         size = @as(usize, payload[0] - rlpByteListShortHeader);
         offset = 1;
     } else if (payload[0] < rlpListShortHeader) {
@@ -97,6 +97,7 @@ pub fn deserialize(comptime T: type, allocator: Allocator, serialized: []const u
     return switch (info) {
         .int => {
             const r = try sizeAndDataOffset(serialized);
+            if (r.offset + r.size > serialized.len) return error.RlpPayloadTooShort;
             try safeReadSliceIntBig(T, serialized[r.offset .. r.offset + r.size], out);
             return r.offset + r.size;
         },
@@ -130,6 +131,7 @@ pub fn deserialize(comptime T: type, allocator: Allocator, serialized: []const u
         .pointer => |ptr| switch (ptr.size) {
             .slice => if (ptr.child == u8) {
                 const r = try sizeAndDataOffset(serialized);
+                if (r.offset + r.size > serialized.len) return error.RlpPayloadTooShort;
                 out.* = serialized[r.offset .. r.offset + r.size];
                 return r.offset + r.size;
             } else {
@@ -163,6 +165,7 @@ pub fn deserialize(comptime T: type, allocator: Allocator, serialized: []const u
         },
         .array => |ary| if (@sizeOf(ary.child) == 1) {
             const r = try sizeAndDataOffset(serialized);
+            if (r.offset + r.size > serialized.len) return error.RlpPayloadTooShort;
             // this is a fixed-size array, so the destination has already been allocated.
             std.mem.copyForwards(u8, out.*[0..], serialized[r.offset .. r.offset + r.size]);
             return r.offset + r.size;
@@ -403,4 +406,19 @@ test "deserialize a pointer to an integer" {
     _ = try deserialize(*u256, std.testing.allocator, &rlp, &out);
     defer std.testing.allocator.destroy(out);
     _ = try std.testing.expectEqual(out.*, 0x0102030405060708090a);
+}
+
+test "deserialize a 55-byte string (0xb7 prefix)" {
+    // 0xb7 == 0x80 + 55 is the short-string header for a 55-byte payload.
+    // we treated 0xb7 as the long-string sentinel (size_size=0),
+    // silently returning an empty string instead of the 55-byte payload.
+    const data = [_]u8{0xAB} ** 55;
+    var rlp_bytes: [56]u8 = undefined;
+    rlp_bytes[0] = 0xb7;
+    @memcpy(rlp_bytes[1..], &data);
+
+    var out: []const u8 = undefined;
+    const consumed = try deserialize([]const u8, std.testing.allocator, &rlp_bytes, &out);
+    try std.testing.expectEqual(56, consumed);
+    try std.testing.expectEqualSlices(u8, &data, out);
 }
