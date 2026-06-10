@@ -8,7 +8,7 @@ pub const deserialize = @import("deserialize.zig").deserialize;
 
 fn writeLengthLength(length: usize, list: *ArrayList(u8)) !u8 {
     var enc_length_buf: [8]u8 = undefined;
-    std.mem.writeInt(usize, &enc_length_buf, length, .big);
+    std.mem.writeInt(u64, &enc_length_buf, length, .big);
     const enc_length = std.mem.trimStart(u8, &enc_length_buf, &[_]u8{0});
     try list.appendSlice(enc_length);
     return @as(u8, @intCast(enc_length.len));
