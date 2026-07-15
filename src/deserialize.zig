@@ -98,6 +98,7 @@ pub fn deserialize(comptime T: type, allocator: Allocator, serialized: []const u
         .int => {
             const r = try sizeAndDataOffset(serialized);
             if (r.offset + r.size > serialized.len) return error.RlpPayloadTooShort;
+            if (r.size > @sizeOf(T)) return error.RlpIntPayloadTooLong;
             try safeReadSliceIntBig(T, serialized[r.offset .. r.offset + r.size], out);
             return r.offset + r.size;
         },
@@ -232,6 +233,15 @@ test "deserialize an integer" {
     consumed = try deserialize(u16, std.testing.allocator, su16long[0..], &u16long);
     try expect(u16long == 0xc0c0);
     try expect(consumed == su16long.len);
+}
+
+test "deserialize an integer rejects oversized payload" {
+    // 0x83 = 0x80 + 3: a 3-byte byte-string payload, which is too large to
+    // fit into a u16 (2 bytes). The decoder must reject this rather than
+    // silently truncating the payload.
+    const rlp = [_]u8{ 0x83, 0x01, 0x02, 0x03 };
+    var out: u16 = undefined;
+    try expectError(error.RlpIntPayloadTooLong, deserialize(u16, std.testing.allocator, rlp[0..], &out));
 }
 
 test "deserialize a structure" {
