@@ -173,9 +173,22 @@ test "inspect: iterator and at() over a header-like list" {
     // ["cat", "dog", ["nested"], 0x2a]
     const data = [_]u8{
         0xd1, // list, 17 payload bytes
-        0x83, 'c', 'a', 't',
-        0x83, 'd', 'o', 'g',
-        0xc7, 0x86, 'n', 'e', 's', 't', 'e', 'd',
+        0x83,
+        'c',
+        'a',
+        't',
+        0x83,
+        'd',
+        'o',
+        'g',
+        0xc7,
+        0x86,
+        'n',
+        'e',
+        's',
+        't',
+        'e',
+        'd',
         0x2a,
     };
     const list = try view(&data);
