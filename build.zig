@@ -35,8 +35,16 @@ pub fn build(b: *Build) void {
             .optimize = optimize 
         }),
     }));
+    var inspect_tests = b.addRunArtifact(b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/inspect.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    }));
 
     const test_step = b.step("test", "Run library tests");
     test_step.dependOn(&main_tests.step);
     test_step.dependOn(&deser_tests.step);
+    test_step.dependOn(&inspect_tests.step);
 }
