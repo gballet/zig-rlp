@@ -18,21 +18,11 @@ const rlpListLongHeader = constants.rlpListLongHeader;
 // difference in byte-size between the number of bytes and the target integer.
 // If so, the bytes have to be extracted into a temporary value.
 inline fn safeReadSliceIntBig(comptime T: type, payload: []const u8, out: *T) !void {
-    // compile time constat to activate the first branch. If
-    // @sizeOf(T) > 1, then it is possible (and necessary) to
-    // shift temp.
-    const log2tgt1 = (@sizeOf(T) > 1);
-    if (log2tgt1 and @sizeOf(T) > payload.len) {
-        var temp: T = 0;
-        var i: usize = 0;
-        while (i < payload.len) : (i += 1) {
-            temp = @shlExact(temp, 8); // payload.len < @sizeOf(T), should not overflow
-            temp |= @as(T, payload[i]);
-        }
-        out.* = temp;
-    } else {
-        out.* = std.mem.readInt(T, payload[0..@sizeOf(T)], .big);
-    }
+    // RLP integers are big-endian with leading zero bytes omitted, so the value
+    // may be shorter than @sizeOf(T) (readVarInt 0-extends) or empty (=> 0). A value
+    // wider than the target type is an overflow and rejected rather than truncated.
+    if (payload.len > @sizeOf(T)) return error.RlpIntOverflow;
+    out.* = std.mem.readVarInt(T, payload, .big);
 }
 
 // Returns the size of the payload as well as the offset to the
@@ -526,4 +516,33 @@ test "deserialize empty slice of non-byte types from short RLP list" {
     defer std.testing.allocator.free(out);
     try std.testing.expect(consumed == rlp.len);
     try std.testing.expect(out.len == 0);
+}
+
+test "deserialize integer from empty RLP value (regression: no OOB panic)" {
+    // 0x80 is the RLP encoding of an empty byte string == integer 0. Its value
+    // region is zero-length, so decoding it into a u8 used to run
+    // `readInt(u8, payload[0..1])` on an empty slice and panic with
+    // "index out of bounds". It must instead 0-extend to 0.
+    {
+        const rlp = [_]u8{0x80};
+        var out: u8 = 0xaa;
+        const consumed = try deserialize(u8, std.testing.allocator, &rlp, &out);
+        try std.testing.expectEqual(@as(usize, 1), consumed);
+        try std.testing.expectEqual(@as(u8, 0), out);
+    }
+    // 0xc0 is an empty list; its value region is also zero-length. This is the exact
+    // devp2p Disconnect `[]` payload that crashed a real decode.
+    {
+        const rlp = [_]u8{0xc0};
+        var out: u8 = 0xaa;
+        const consumed = try deserialize(u8, std.testing.allocator, &rlp, &out);
+        try std.testing.expectEqual(@as(usize, 1), consumed);
+        try std.testing.expectEqual(@as(u8, 0), out);
+    }
+    // A value wider than the target type is rejected, not truncated or panicked.
+    {
+        const rlp = [_]u8{ 0x82, 0x03, 0xe8 }; // 2-byte string 0x03e8
+        var out: u8 = 0;
+        try std.testing.expectError(error.RlpIntPayloadTooLong, deserialize(u8, std.testing.allocator, &rlp, &out));
+    }
 }
