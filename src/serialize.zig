@@ -5,6 +5,7 @@ const Allocator = std.mem.Allocator;
 const hasFn = std.meta.hasFn;
 
 pub const deserialize = @import("deserialize.zig").deserialize;
+const constants = @import("constants.zig");
 
 fn writeLengthLength(length: usize, list: *ArrayList(u8)) !u8 {
     var enc_length_buf: [8]u8 = undefined;
@@ -18,6 +19,12 @@ pub const SerializationError = error{
     UnsupportedType,
     OutOfMemory,
 };
+
+const rlpByteListShortHeader = constants.rlpByteListShortHeader;
+const rlpByteListLongHeader = constants.rlpByteListLongHeader;
+const rlpListShortHeader = constants.rlpListShortHeader;
+const rlpListLongHeader = constants.rlpListLongHeader;
+const rlpShortMaxLen = constants.rlpShortMaxLen;
 
 pub fn serialize(comptime T: type, allocator: Allocator, data: T, list: *ArrayList(u8)) SerializationError!void {
     if (comptime hasFn(T, "encodeToRLP")) {

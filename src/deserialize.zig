@@ -1,5 +1,6 @@
 const std = @import("std");
 const serialize = @import("serialize.zig").serialize;
+const constants = @import("constants.zig");
 const expect = std.testing.expect;
 const expectError = std.testing.expectError;
 const eql = std.mem.eql;
@@ -8,10 +9,10 @@ const ArrayList = std.array_list.Managed;
 const hasFn = std.meta.hasFn;
 const Allocator = std.mem.Allocator;
 
-const rlpByteListShortHeader = 128;
-const rlpByteListLongHeader = 183;
-const rlpListShortHeader = 192;
-const rlpListLongHeader = 247;
+const rlpByteListShortHeader = constants.rlpByteListShortHeader;
+const rlpByteListLongHeader = constants.rlpByteListLongHeader;
+const rlpListShortHeader = constants.rlpListShortHeader;
+const rlpListLongHeader = constants.rlpListLongHeader;
 
 // When reading the payload, leading zeros are removed, so there might be a
 // difference in byte-size between the number of bytes and the target integer.
