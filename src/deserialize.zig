@@ -37,6 +37,16 @@ pub fn deserialize(comptime T: type, allocator: Allocator, serialized: []const u
     const info = @typeInfo(T);
     return switch (info) {
         .int => {
+            comptime {
+                // @sizeOf rounds odd-width integers up to the next power of
+                // two (u24 -> 4 bytes), which desynchronizes the payload size
+                // guard from readVarInt's bit-width precondition. Only accept
+                // widths where @sizeOf(T) * 8 == @bitSizeOf(T).
+                const bits = @typeInfo(T).int.bits;
+                if (bits < 8 or !std.math.isPowerOfTwo(bits)) {
+                    @compileError("RLP integers must have a power-of-two bit width of at least 8; got " ++ @typeName(T));
+                }
+            }
             const r = try sizeAndDataOffset(serialized);
             if (r.size > serialized.len - r.offset) return error.RlpPayloadTooShort;
             if (r.size > @sizeOf(T)) return error.RlpIntPayloadTooLong;
