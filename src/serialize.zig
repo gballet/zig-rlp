@@ -19,6 +19,7 @@ fn writeLengthLength(length: usize, list: *ArrayList(u8)) !u8 {
 pub const SerializationError = error{
     UnsupportedType,
     OutOfMemory,
+    EmptyRawValue,
 };
 
 const rlpByteListShortHeader = common.rlpByteListShortHeader;
@@ -187,6 +188,11 @@ pub const RawRLPValue = union(enum) {
     pub fn encodeToRLP(self: RawRLPValue, allocator: Allocator, list: *ArrayList(u8)) !void {
         return switch (self) {
             .value => |v| {
+                // An empty raw value has no RLP encoding (even the empty byte
+                // string is 0x80), and emitting nothing would corrupt any
+                // enclosing list: the header is computed over the body that
+                // silently lost an element.
+                if (v.len == 0) return error.EmptyRawValue;
                 try list.appendSlice(v);
             },
             .list => |v| {
@@ -485,4 +491,21 @@ test "raw rlp decode rejects a length that overflows usize" {
     const evil = [_]u8{ 0xbf, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
     var out: RawRLPValue = undefined;
     try testing.expectError(error.RlpPayloadTooShort, deserialize(RawRLPValue, std.testing.allocator, &evil, &out));
+}
+
+test "raw rlp rejects an empty raw value" {
+    const allocator = testing.allocator;
+    var out = ArrayList(u8).init(allocator);
+    defer out.deinit();
+
+    // Top-level: there is nothing to emit, and emitting nothing is not RLP.
+    try testing.expectError(error.EmptyRawValue, serialize(RawRLPValue, allocator, RawRLPValue{ .value = &[_]u8{} }, &out));
+
+    // Nested in a list: previously the list header was computed over the
+    // body with the empty element silently dropped (c1 01 for two elements,
+    // which decodes back to one). The child serialization hits the same check.
+    try testing.expectError(error.EmptyRawValue, serialize(RawRLPValue, allocator, RawRLPValue{ .list = &[_]RawRLPValue{
+        .{ .value = &[_]u8{} },
+        .{ .value = &[_]u8{0x01} },
+    } }, &out));
 }

@@ -13,6 +13,7 @@ pub inline fn safeReadSliceIntBig(comptime T: type, payload: []const u8, out: *T
     // RLP integers are big-endian with leading zero bytes omitted, so the value
     // may be shorter than @sizeOf(T) (readVarInt 0-extends) or empty (=> 0). A value
     // wider than the target type is an overflow and rejected rather than truncated.
+    // NOTE: this is only working if the uint's byte length is a power of 2.
     if (payload.len > @sizeOf(T)) return error.RlpIntOverflow;
     out.* = std.mem.readVarInt(T, payload, .big);
 }
