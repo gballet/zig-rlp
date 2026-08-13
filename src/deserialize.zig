@@ -154,6 +154,21 @@ pub fn deserialize(comptime T: type, allocator: Allocator, serialized: []const u
                 return offset;
             }
         },
+        .bool => {
+            const r = try sizeAndDataOffset(serialized);
+            if (r.size > serialized.len - r.offset) return error.RlpPayloadTooShort;
+            const payload = serialized[r.offset .. r.offset + r.size];
+            out.* = switch (payload.len) {
+                0 => false,
+                1 => switch (payload[0]) {
+                    0 => false,
+                    1 => true,
+                    else => return error.RlpInvalidBoolean,
+                },
+                else => return error.RlpInvalidBoolean,
+            };
+            return r.offset + r.size;
+        },
         else => return error.UnsupportedType,
     };
 }
@@ -506,3 +521,44 @@ test "deserialize integer from empty RLP value (regression: no OOB panic)" {
         try std.testing.expectError(error.RlpIntPayloadTooLong, deserialize(u8, std.testing.allocator, &rlp, &out));
     }
 }
+
+test "deserialize a boolean" {
+    // Canonical encodings: 0x80 (empty byte string) is false, 0x01 is true.
+    {
+        var out: bool = true;
+        try expect(try deserialize(bool, std.testing.allocator, &[_]u8{0x80}, &out) == 1);
+        try expect(out == false);
+    }
+    {
+        var out: bool = false;
+        try expect(try deserialize(bool, std.testing.allocator, &[_]u8{0x01}, &out) == 1);
+        try expect(out == true);
+    }
+    // A bare 0x00 is a one-byte string, not the canonical false, but it is
+    // accepted for compatibility with encoders that emit it.
+    {
+        var out: bool = true;
+        try expect(try deserialize(bool, std.testing.allocator, &[_]u8{0x00}, &out) == 1);
+        try expect(out == false);
+    }
+    // Anything else is not a boolean.
+    var out: bool = undefined;
+    try expectError(error.RlpInvalidBoolean, deserialize(bool, std.testing.allocator, &[_]u8{0x02}, &out));
+    try expectError(error.RlpInvalidBoolean, deserialize(bool, std.testing.allocator, &[_]u8{ 0x82, 0x00, 0x01 }, &out));
+    try expectError(error.RlpPayloadTooShort, deserialize(bool, std.testing.allocator, &[_]u8{}, &out));
+}
+
+test "deserialize a struct inside a struct with booleans" {
+    const S = struct { a: bool, b: u16, c: bool };
+    var list = ArrayList(u8).init(std.testing.allocator);
+    defer list.deinit();
+    const in = S{ .a = false, .b = 0xabcd, .c = true };
+    try serialize(S, std.testing.allocator, in, &list);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0xc5, 0x80, 0x82, 0xab, 0xcd, 0x01 }, list.items);
+
+    var out: S = undefined;
+    const consumed = try deserialize(S, std.testing.allocator, list.items, &out);
+    try expect(consumed == list.items.len);
+    try std.testing.expectEqual(in, out);
+}
+
