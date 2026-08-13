@@ -55,6 +55,9 @@ pub fn sizeAndDataOffset(payload: []const u8) !struct { size: usize, offset: usi
         try safeReadSliceIntBig(usize, payload[1 .. 1 + size_size], &size);
         offset = 1 + size_size;
     }
+    // Callers rely on `payload.len - offset` not underflowing when
+    // bounds-checking the payload, so this must hold on every path above.
+    std.debug.assert(offset <= payload.len);
 
     return .{ .size = size, .offset = offset };
 }

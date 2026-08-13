@@ -197,8 +197,8 @@ pub const RawRLPValue = union(enum) {
 
     pub fn decodeFromRLP(self: *RawRLPValue, _: Allocator, serialized: []const u8) !usize {
         const r = try sizeAndDataOffset(serialized);
+        if (r.size > serialized.len - r.offset) return error.RlpPayloadTooShort;
         const consumed = r.offset + r.size;
-        if (consumed > serialized.len) return error.RlpPayloadTooShort;
         self.* = .{ .value = serialized[0..consumed] };
         return consumed;
     }
@@ -473,4 +473,16 @@ test "raw rlp captures items verbatim" {
     var reencoded = ArrayList(u8).init(a);
     try serialize([]const RawRLPValue, a, items, &reencoded);
     try testing.expectEqualSlices(u8, &encoded, reencoded.items);
+}
+
+test "raw rlp decode rejects a length that overflows usize" {
+    // 0xbf = 0xb7 + 8: a byte-string header carrying an 8-byte length field
+    // whose value is 0xffff_ffff_ffff_ffff. The header itself consumes 9
+    // bytes, so computing `r.offset + r.size` unchecked wraps usize: a panic
+    // on untrusted input in safe modes, and in ReleaseFast the wrapped sum
+    // slips past the bounds check and yields a bogus 8-byte value. The size
+    // must be checked against the remaining buffer before adding the offset.
+    const evil = [_]u8{ 0xbf, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
+    var out: RawRLPValue = undefined;
+    try testing.expectError(error.RlpPayloadTooShort, deserialize(RawRLPValue, std.testing.allocator, &evil, &out));
 }

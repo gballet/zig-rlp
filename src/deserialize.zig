@@ -22,6 +22,7 @@ fn countRlpListItems(serialized: []const u8) !usize {
     var list_size: usize = 0;
     while (offset < serialized.len) : (list_size += 1) {
         const temp = try sizeAndDataOffset(serialized[offset..]);
+        if (temp.size > serialized.len - offset - temp.offset) return error.RlpPayloadTooShort;
         offset += temp.offset + temp.size;
     }
     return list_size;
@@ -37,7 +38,7 @@ pub fn deserialize(comptime T: type, allocator: Allocator, serialized: []const u
     return switch (info) {
         .int => {
             const r = try sizeAndDataOffset(serialized);
-            if (r.offset + r.size > serialized.len) return error.RlpPayloadTooShort;
+            if (r.size > serialized.len - r.offset) return error.RlpPayloadTooShort;
             if (r.size > @sizeOf(T)) return error.RlpIntPayloadTooLong;
             try safeReadSliceIntBig(T, serialized[r.offset .. r.offset + r.size], out);
             return r.offset + r.size;
@@ -53,11 +54,11 @@ pub fn deserialize(comptime T: type, allocator: Allocator, serialized: []const u
             }
 
             const r = try sizeAndDataOffset(serialized);
-            // limit of the struct's rlp encoding inside the larger buffer
-            const limit = r.offset + r.size;
-            if (limit > serialized.len) {
+            if (r.size > serialized.len - r.offset) {
                 return error.InvalidSerializedLength;
             }
+            // limit of the struct's rlp encoding inside the larger buffer
+            const limit = r.offset + r.size;
 
             var offset = r.offset;
             inline for (struc.fields) |field| {
@@ -72,7 +73,7 @@ pub fn deserialize(comptime T: type, allocator: Allocator, serialized: []const u
         .pointer => |ptr| switch (ptr.size) {
             .slice => if (ptr.child == u8) {
                 const r = try sizeAndDataOffset(serialized);
-                if (r.offset + r.size > serialized.len) return error.RlpPayloadTooShort;
+                if (r.size > serialized.len - r.offset) return error.RlpPayloadTooShort;
                 if (ptr.is_const) {
                     out.* = serialized[r.offset .. r.offset + r.size];
                 } else {
@@ -86,6 +87,7 @@ pub fn deserialize(comptime T: type, allocator: Allocator, serialized: []const u
                 }
 
                 const r = try sizeAndDataOffset(serialized);
+                if (r.size > serialized.len - r.offset) return error.RlpPayloadTooShort;
                 const end = r.offset + r.size;
 
                 const list_size = try countRlpListItems(serialized[r.offset..end]);
@@ -112,7 +114,7 @@ pub fn deserialize(comptime T: type, allocator: Allocator, serialized: []const u
         },
         .array => |ary| if (@sizeOf(ary.child) == 1) {
             const r = try sizeAndDataOffset(serialized);
-            if (r.offset + r.size > serialized.len) return error.RlpPayloadTooShort;
+            if (r.size > serialized.len - r.offset) return error.RlpPayloadTooShort;
             if (r.size != ary.len) return error.RlpInvalidLength;
             // this is a fixed-size array, so the destination has already been allocated.
             std.mem.copyForwards(u8, out.*[0..], serialized[r.offset .. r.offset + r.size]);
