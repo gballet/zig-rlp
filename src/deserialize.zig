@@ -1,71 +1,20 @@
 const std = @import("std");
 const serialize = @import("serialize.zig").serialize;
-const constants = @import("constants.zig");
+const common = @import("common.zig");
 const expect = std.testing.expect;
 const expectError = std.testing.expectError;
 const eql = std.mem.eql;
-const readInt = std.mem.readInt;
 const ArrayList = std.array_list.Managed;
 const hasFn = std.meta.hasFn;
 const Allocator = std.mem.Allocator;
 
-const rlpByteListShortHeader = constants.rlpByteListShortHeader;
-const rlpByteListLongHeader = constants.rlpByteListLongHeader;
-const rlpListShortHeader = constants.rlpListShortHeader;
-const rlpListLongHeader = constants.rlpListLongHeader;
+const rlpByteListShortHeader = common.rlpByteListShortHeader;
+const rlpByteListLongHeader = common.rlpByteListLongHeader;
+const rlpListShortHeader = common.rlpListShortHeader;
+const rlpListLongHeader = common.rlpListLongHeader;
 
-// When reading the payload, leading zeros are removed, so there might be a
-// difference in byte-size between the number of bytes and the target integer.
-// If so, the bytes have to be extracted into a temporary value.
-inline fn safeReadSliceIntBig(comptime T: type, payload: []const u8, out: *T) !void {
-    // RLP integers are big-endian with leading zero bytes omitted, so the value
-    // may be shorter than @sizeOf(T) (readVarInt 0-extends) or empty (=> 0). A value
-    // wider than the target type is an overflow and rejected rather than truncated.
-    if (payload.len > @sizeOf(T)) return error.RlpIntOverflow;
-    out.* = std.mem.readVarInt(T, payload, .big);
-}
-
-// Returns the size of the payload as well as the offset to the
-// start of the actual data.
-pub fn sizeAndDataOffset(payload: []const u8) !struct { size: usize, offset: usize } {
-    var size: usize = undefined;
-    var offset: usize = undefined;
-
-    if (payload.len == 0) {
-        return error.RlpPayloadTooShort;
-    }
-
-    if (payload[0] < rlpByteListShortHeader) {
-        offset = 0;
-        size = 1;
-    } else if (payload[0] <= rlpByteListLongHeader) {
-        size = @as(usize, payload[0] - rlpByteListShortHeader);
-        offset = 1;
-    } else if (payload[0] < rlpListShortHeader) {
-        const size_size = @as(usize, payload[0] - rlpByteListLongHeader);
-
-        if (payload.len < 1 + size_size) {
-            return error.RlpPayloadTooShort;
-        }
-
-        try safeReadSliceIntBig(usize, payload[1 .. 1 + size_size], &size);
-        offset = 1 + size_size;
-    } else if (payload[0] <= rlpListLongHeader) {
-        size = @as(usize, payload[0] - rlpListShortHeader);
-        offset = 1;
-    } else {
-        const size_size = @as(usize, payload[0] - rlpListLongHeader);
-
-        if (payload.len < 1 + size_size) {
-            return error.RlpPayloadTooShort;
-        }
-
-        try safeReadSliceIntBig(usize, payload[1 .. 1 + size_size], &size);
-        offset = 1 + size_size;
-    }
-
-    return .{ .size = size, .offset = offset };
-}
+const safeReadSliceIntBig = common.safeReadSliceIntBig;
+const sizeAndDataOffset = common.sizeAndDataOffset;
 
 // Count the number of elements in a list
 fn countRlpListItems(serialized: []const u8) !usize {
