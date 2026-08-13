@@ -40,8 +40,14 @@ pub fn serialize(comptime T: type, allocator: Allocator, data: T, list: *ArrayLi
                 .unsigned => {},
                 .signed => @compileError("RLP does not support signed integers; use an unsigned type instead"),
             };
+            comptime {
+                const bits = @typeInfo(T).int.bits;
+                if (bits < 8 or !std.math.isPowerOfTwo(bits)) {
+                    @compileError("RLP integers must have a power-of-two bit width of at least 8; got " ++ @typeName(T));
+                }
+            }
             return switch (data) {
-                0 => list.append(0x80),
+                0 => list.append(rlpByteListShortHeader),
                 1...127 => list.append(@truncate(data)),
 
                 else => {
@@ -49,15 +55,20 @@ pub fn serialize(comptime T: type, allocator: Allocator, data: T, list: *ArrayLi
                     // be left-trimmed.
                     var int_buf: [@sizeOf(T)]u8 = undefined;
                     std.mem.writeInt(T, &int_buf, data, .big);
-                    var tlist = ArrayList(u8).init(list.allocator);
-                    defer tlist.deinit();
-                    try tlist.appendSlice(&int_buf);
-                    var start_offset: usize = 0;
-                    while (tlist.items[start_offset] == 0) : (start_offset += 1) {}
+                    const payload = std.mem.trimStart(u8, &int_buf, &[_]u8{0});
 
                     // copy final header + trimmed data
                     try list.append(@as(u8, @truncate(128 + tlist.items.len - start_offset)));
                     _ = try list.appendSlice(tlist.items[start_offset..]);
+                    if (payload.len <= rlpShortMaxLen) {
+                        try list.append(rlpByteListShortHeader + @as(u8, @intCast(payload.len)));
+                    } else {
+                        const header_offset = list.items.len;
+                        try list.append(0);
+                        const length_length = try writeLengthLength(payload.len, list);
+                        list.items[header_offset] = rlpByteListLongHeader + length_length;
+                    }
+                    try list.appendSlice(payload);
                 },
             };
         },
@@ -175,7 +186,7 @@ pub fn serialize(comptime T: type, allocator: Allocator, data: T, list: *ArrayLi
             try list.append(0x80);
         },
         .bool => {
-            try list.append(if (data) 1 else 0);
+            try list.append(if (data) 1 else rlpByteListShortHeader);
         },
         else => return error.UnsupportedType,
     };
@@ -334,14 +345,27 @@ test "serialize a struct with functions" {
 test "serialize a boolean" {
     var list = ArrayList(u8).init(testing.allocator);
     defer list.deinit();
+
     try serialize(bool, testing.allocator, false, &list);
-    var expected = [_]u8{0};
-    try testing.expect(std.mem.eql(u8, list.items[0..], expected[0..]));
+    try testing.expectEqualSlices(u8, &[_]u8{0x80}, list.items);
 
     list.clearRetainingCapacity();
-    expected[0] = 1;
     try serialize(bool, testing.allocator, true, &list);
-    try testing.expect(std.mem.eql(u8, list.items[0..], expected[0..]));
+    try testing.expectEqualSlices(u8, &[_]u8{0x01}, list.items);
+}
+
+test "round-trip a boolean" {
+    var list = ArrayList(u8).init(testing.allocator);
+    defer list.deinit();
+
+    for ([_]bool{ false, true }) |v| {
+        list.clearRetainingCapacity();
+        try serialize(bool, testing.allocator, v, &list);
+        var out: bool = undefined;
+        const consumed = try deserialize(bool, testing.allocator, list.items, &out);
+        try testing.expectEqual(list.items.len, consumed);
+        try testing.expectEqual(v, out);
+    }
 }
 
 const RLPEncodablePerson = struct {
@@ -508,4 +532,187 @@ test "raw rlp rejects an empty raw value" {
         .{ .value = &[_]u8{} },
         .{ .value = &[_]u8{0x01} },
     } }, &out));
+}
+
+test "serialize an integer whose payload exceeds 55 bytes" {
+    var list = ArrayList(u8).init(testing.allocator);
+    defer list.deinit();
+
+    // 55 significant bytes is the last size that fits the short form.
+    const short_max: u512 = (@as(u512, 1) << 440) - 1;
+    try serialize(u512, testing.allocator, short_max, &list);
+    try testing.expectEqualSlices(u8, &([_]u8{0xb7} ++ [_]u8{0xff} ** 55), list.items);
+
+    list.clearRetainingCapacity();
+    const long_min: u512 = (@as(u512, 1) << 448) - 1;
+    try serialize(u512, testing.allocator, long_min, &list);
+    try testing.expectEqualSlices(u8, &([_]u8{ 0xb8, 0x38 } ++ [_]u8{0xff} ** 56), list.items);
+
+    list.clearRetainingCapacity();
+    try serialize(u512, testing.allocator, std.math.maxInt(u512), &list);
+    try testing.expectEqualSlices(u8, &([_]u8{ 0xb8, 0x40 } ++ [_]u8{0xff} ** 64), list.items);
+
+    list.clearRetainingCapacity();
+    try serialize(u4096, testing.allocator, std.math.maxInt(u4096), &list);
+    try testing.expectEqualSlices(u8, &([_]u8{ 0xb9, 0x02, 0x00 } ++ [_]u8{0xff} ** 512), list.items);
+}
+
+test "round-trip integers wider than 55 bytes" {
+    var list = ArrayList(u8).init(testing.allocator);
+    defer list.deinit();
+
+    inline for (.{ u512, u1024 }) |T| {
+        inline for (.{ std.math.maxInt(T), (@as(T, 1) << (@bitSizeOf(T) - 1)), @as(T, 0) }) |v| {
+            list.clearRetainingCapacity();
+            try serialize(T, testing.allocator, v, &list);
+            var out: T = undefined;
+            const consumed = try deserialize(T, testing.allocator, list.items, &out);
+            try testing.expectEqual(list.items.len, consumed);
+            try testing.expectEqual(@as(T, v), out);
+        }
+    }
+}
+
+test "serialize a pointer to a single item" {
+    var list = ArrayList(u8).init(testing.allocator);
+    defer list.deinit();
+
+    const v: u16 = 0xabcd;
+    try serialize(*const u16, testing.allocator, &v, &list);
+    try testing.expectEqualSlices(u8, &[_]u8{ 0x82, 0xab, 0xcd }, list.items);
+
+    list.clearRetainingCapacity();
+    const Pair = struct { a: u8, b: u8 };
+    const pair = Pair{ .a = 1, .b = 2 };
+    try serialize(*const Pair, testing.allocator, &pair, &list);
+    try testing.expectEqualSlices(u8, &[_]u8{ 0xc2, 0x01, 0x02 }, list.items);
+}
+
+test "serialize a slice of non-byte items with a payload over 55 bytes" {
+    var list = ArrayList(u8).init(testing.allocator);
+    defer list.deinit();
+
+    const backing = [_]u16{0xabcd} ** 20;
+    const items: []const u16 = &backing;
+    try serialize([]const u16, testing.allocator, items, &list);
+    try testing.expectEqualSlices(u8, &([_]u8{ 0xf8, 0x3c } ++ [_]u8{ 0x82, 0xab, 0xcd } ** 20), list.items);
+
+    list.clearRetainingCapacity();
+    const big_backing = [_]u16{0xabcd} ** 100;
+    const big_items: []const u16 = &big_backing;
+    try serialize([]const u16, testing.allocator, big_items, &list);
+    try testing.expectEqualSlices(u8, &([_]u8{ 0xf9, 0x01, 0x2c } ++ [_]u8{ 0x82, 0xab, 0xcd } ** 100), list.items);
+}
+
+test "serialize an empty byte array and single high bytes" {
+    var list = ArrayList(u8).init(testing.allocator);
+    defer list.deinit();
+
+    try serialize([0]u8, testing.allocator, [_]u8{}, &list);
+    try testing.expectEqualSlices(u8, &[_]u8{0x80}, list.items);
+
+    list.clearRetainingCapacity();
+    try serialize([1]u8, testing.allocator, [_]u8{0x7f}, &list);
+    try testing.expectEqualSlices(u8, &[_]u8{0x7f}, list.items);
+
+    list.clearRetainingCapacity();
+    try serialize([1]u8, testing.allocator, [_]u8{0x80}, &list);
+    try testing.expectEqualSlices(u8, &[_]u8{ 0x81, 0x80 }, list.items);
+
+    list.clearRetainingCapacity();
+    try serialize([1]u8, testing.allocator, [_]u8{0xff}, &list);
+    try testing.expectEqualSlices(u8, &[_]u8{ 0x81, 0xff }, list.items);
+}
+
+test "serialize an empty slice and an empty struct" {
+    var list = ArrayList(u8).init(testing.allocator);
+    defer list.deinit();
+
+    const empty: []const u8 = &[_]u8{};
+    try serialize([]const u8, testing.allocator, empty, &list);
+    try testing.expectEqualSlices(u8, &[_]u8{0x80}, list.items);
+
+    list.clearRetainingCapacity();
+    const empty_ints: []const u16 = &[_]u16{};
+    try serialize([]const u16, testing.allocator, empty_ints, &list);
+    try testing.expectEqualSlices(u8, &[_]u8{0xc0}, list.items);
+
+    list.clearRetainingCapacity();
+    try serialize(struct {}, testing.allocator, .{}, &list);
+    try testing.expectEqualSlices(u8, &[_]u8{0xc0}, list.items);
+}
+
+test "serialize rejects unsupported types" {
+    var list = ArrayList(u8).init(testing.allocator);
+    defer list.deinit();
+
+    try testing.expectError(error.UnsupportedType, serialize(f32, testing.allocator, 1.5, &list));
+    try testing.expectError(error.UnsupportedType, serialize(enum { a, b }, testing.allocator, .a, &list));
+
+    const backing = [_]u8{ 1, 2, 3 };
+    const many: [*]const u8 = &backing;
+    try testing.expectError(error.UnsupportedType, serialize([*]const u8, testing.allocator, many, &list));
+}
+
+test "serialize null and a populated optional" {
+    var list = ArrayList(u8).init(testing.allocator);
+    defer list.deinit();
+
+    try serialize(@TypeOf(null), testing.allocator, null, &list);
+    try testing.expectEqualSlices(u8, &[_]u8{0x80}, list.items);
+
+    list.clearRetainingCapacity();
+    try serialize(?u16, testing.allocator, 0xabcd, &list);
+    try testing.expectEqualSlices(u8, &[_]u8{ 0x82, 0xab, 0xcd }, list.items);
+}
+
+test "round-trip random integers of every supported width" {
+    var list = ArrayList(u8).init(testing.allocator);
+    defer list.deinit();
+
+    var prng = std.Random.DefaultPrng.init(0x5eed_1234_abcd_0001);
+    const random = prng.random();
+
+    inline for (.{ u8, u16, u32, u64, u128, u256, u512, u1024 }) |T| {
+        for (0..256) |_| {
+            var bytes: [@sizeOf(T)]u8 = undefined;
+            random.bytes(&bytes);
+            const v = std.mem.readInt(T, &bytes, .big) >> random.int(std.math.Log2Int(T));
+
+            list.clearRetainingCapacity();
+            try serialize(T, testing.allocator, v, &list);
+
+            var out: T = undefined;
+            const consumed = try deserialize(T, testing.allocator, list.items, &out);
+            try testing.expectEqual(list.items.len, consumed);
+            try testing.expectEqual(v, out);
+
+            var again = ArrayList(u8).init(testing.allocator);
+            defer again.deinit();
+            try serialize(T, testing.allocator, out, &again);
+            try testing.expectEqualSlices(u8, list.items, again.items);
+        }
+    }
+}
+
+test "round-trip random byte strings across the length boundaries" {
+    var prng = std.Random.DefaultPrng.init(0x5eed_1234_abcd_0002);
+    const random = prng.random();
+
+    var buf: [512]u8 = undefined;
+    var list = ArrayList(u8).init(testing.allocator);
+    defer list.deinit();
+
+    for (0..301) |len| {
+        const payload = buf[0..len];
+        random.bytes(payload);
+
+        list.clearRetainingCapacity();
+        try serialize([]const u8, testing.allocator, payload, &list);
+
+        var out: []const u8 = undefined;
+        const consumed = try deserialize([]const u8, testing.allocator, list.items, &out);
+        try testing.expectEqual(list.items.len, consumed);
+        try testing.expectEqualSlices(u8, payload, out);
+    }
 }
