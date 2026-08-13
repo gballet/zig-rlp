@@ -1,81 +1,20 @@
 const std = @import("std");
 const serialize = @import("serialize.zig").serialize;
-const constants = @import("constants.zig");
+const common = @import("common.zig");
 const expect = std.testing.expect;
 const expectError = std.testing.expectError;
 const eql = std.mem.eql;
-const readInt = std.mem.readInt;
 const ArrayList = std.array_list.Managed;
 const hasFn = std.meta.hasFn;
 const Allocator = std.mem.Allocator;
 
-const rlpByteListShortHeader = constants.rlpByteListShortHeader;
-const rlpByteListLongHeader = constants.rlpByteListLongHeader;
-const rlpListShortHeader = constants.rlpListShortHeader;
-const rlpListLongHeader = constants.rlpListLongHeader;
+const rlpByteListShortHeader = common.rlpByteListShortHeader;
+const rlpByteListLongHeader = common.rlpByteListLongHeader;
+const rlpListShortHeader = common.rlpListShortHeader;
+const rlpListLongHeader = common.rlpListLongHeader;
 
-// When reading the payload, leading zeros are removed, so there might be a
-// difference in byte-size between the number of bytes and the target integer.
-// If so, the bytes have to be extracted into a temporary value.
-inline fn safeReadSliceIntBig(comptime T: type, payload: []const u8, out: *T) !void {
-    // compile time constat to activate the first branch. If
-    // @sizeOf(T) > 1, then it is possible (and necessary) to
-    // shift temp.
-    const log2tgt1 = (@sizeOf(T) > 1);
-    if (log2tgt1 and @sizeOf(T) > payload.len) {
-        var temp: T = 0;
-        var i: usize = 0;
-        while (i < payload.len) : (i += 1) {
-            temp = @shlExact(temp, 8); // payload.len < @sizeOf(T), should not overflow
-            temp |= @as(T, payload[i]);
-        }
-        out.* = temp;
-    } else {
-        out.* = std.mem.readInt(T, payload[0..@sizeOf(T)], .big);
-    }
-}
-
-// Returns the size of the payload as well as the offset to the
-// start of the actual data.
-fn sizeAndDataOffset(payload: []const u8) !struct { size: usize, offset: usize } {
-    var size: usize = undefined;
-    var offset: usize = undefined;
-
-    if (payload.len == 0) {
-        return error.RlpPayloadTooShort;
-    }
-
-    if (payload[0] < rlpByteListShortHeader) {
-        offset = 0;
-        size = 1;
-    } else if (payload[0] <= rlpByteListLongHeader) {
-        size = @as(usize, payload[0] - rlpByteListShortHeader);
-        offset = 1;
-    } else if (payload[0] < rlpListShortHeader) {
-        const size_size = @as(usize, payload[0] - rlpByteListLongHeader);
-
-        if (payload.len < 1 + size_size) {
-            return error.RlpPayloadTooShort;
-        }
-
-        try safeReadSliceIntBig(usize, payload[1 .. 1 + size_size], &size);
-        offset = 1 + size_size;
-    } else if (payload[0] <= rlpListLongHeader) {
-        size = @as(usize, payload[0] - rlpListShortHeader);
-        offset = 1;
-    } else {
-        const size_size = @as(usize, payload[0] - rlpListLongHeader);
-
-        if (payload.len < 1 + size_size) {
-            return error.RlpPayloadTooShort;
-        }
-
-        try safeReadSliceIntBig(usize, payload[1 .. 1 + size_size], &size);
-        offset = 1 + size_size;
-    }
-
-    return .{ .size = size, .offset = offset };
-}
+const safeReadSliceIntBig = common.safeReadSliceIntBig;
+const sizeAndDataOffset = common.sizeAndDataOffset;
 
 // Count the number of elements in a list
 fn countRlpListItems(serialized: []const u8) !usize {
@@ -83,6 +22,7 @@ fn countRlpListItems(serialized: []const u8) !usize {
     var list_size: usize = 0;
     while (offset < serialized.len) : (list_size += 1) {
         const temp = try sizeAndDataOffset(serialized[offset..]);
+        if (temp.size > serialized.len - offset - temp.offset) return error.RlpPayloadTooShort;
         offset += temp.offset + temp.size;
     }
     return list_size;
@@ -97,9 +37,18 @@ pub fn deserialize(comptime T: type, allocator: Allocator, serialized: []const u
     const info = @typeInfo(T);
     return switch (info) {
         .int => {
+            comptime {
+                // @sizeOf rounds odd-width integers up to the next power of
+                // two (u24 -> 4 bytes), which desynchronizes the payload size
+                // guard from readVarInt's bit-width precondition. Only accept
+                // widths where @sizeOf(T) * 8 == @bitSizeOf(T).
+                const bits = @typeInfo(T).int.bits;
+                if (bits < 8 or !std.math.isPowerOfTwo(bits)) {
+                    @compileError("RLP integers must have a power-of-two bit width of at least 8; got " ++ @typeName(T));
+                }
+            }
             const r = try sizeAndDataOffset(serialized);
-            if (r.offset + r.size > serialized.len) return error.RlpPayloadTooShort;
-            if (r.size > @sizeOf(T)) return error.RlpIntPayloadTooLong;
+            if (r.size > serialized.len - r.offset) return error.RlpPayloadTooShort;
             try safeReadSliceIntBig(T, serialized[r.offset .. r.offset + r.size], out);
             return r.offset + r.size;
         },
@@ -114,11 +63,11 @@ pub fn deserialize(comptime T: type, allocator: Allocator, serialized: []const u
             }
 
             const r = try sizeAndDataOffset(serialized);
-            // limit of the struct's rlp encoding inside the larger buffer
-            const limit = r.offset + r.size;
-            if (limit > serialized.len) {
+            if (r.size > serialized.len - r.offset) {
                 return error.InvalidSerializedLength;
             }
+            // limit of the struct's rlp encoding inside the larger buffer
+            const limit = r.offset + r.size;
 
             var offset = r.offset;
             inline for (struc.fields) |field| {
@@ -133,7 +82,7 @@ pub fn deserialize(comptime T: type, allocator: Allocator, serialized: []const u
         .pointer => |ptr| switch (ptr.size) {
             .slice => if (ptr.child == u8) {
                 const r = try sizeAndDataOffset(serialized);
-                if (r.offset + r.size > serialized.len) return error.RlpPayloadTooShort;
+                if (r.size > serialized.len - r.offset) return error.RlpPayloadTooShort;
                 if (ptr.is_const) {
                     out.* = serialized[r.offset .. r.offset + r.size];
                 } else {
@@ -147,6 +96,7 @@ pub fn deserialize(comptime T: type, allocator: Allocator, serialized: []const u
                 }
 
                 const r = try sizeAndDataOffset(serialized);
+                if (r.size > serialized.len - r.offset) return error.RlpPayloadTooShort;
                 const end = r.offset + r.size;
 
                 const list_size = try countRlpListItems(serialized[r.offset..end]);
@@ -173,7 +123,7 @@ pub fn deserialize(comptime T: type, allocator: Allocator, serialized: []const u
         },
         .array => |ary| if (@sizeOf(ary.child) == 1) {
             const r = try sizeAndDataOffset(serialized);
-            if (r.offset + r.size > serialized.len) return error.RlpPayloadTooShort;
+            if (r.size > serialized.len - r.offset) return error.RlpPayloadTooShort;
             if (r.size != ary.len) return error.RlpInvalidLength;
             // this is a fixed-size array, so the destination has already been allocated.
             std.mem.copyForwards(u8, out.*[0..], serialized[r.offset .. r.offset + r.size]);
@@ -526,4 +476,33 @@ test "deserialize empty slice of non-byte types from short RLP list" {
     defer std.testing.allocator.free(out);
     try std.testing.expect(consumed == rlp.len);
     try std.testing.expect(out.len == 0);
+}
+
+test "deserialize integer from empty RLP value (regression: no OOB panic)" {
+    // 0x80 is the RLP encoding of an empty byte string == integer 0. Its value
+    // region is zero-length, so decoding it into a u8 used to run
+    // `readInt(u8, payload[0..1])` on an empty slice and panic with
+    // "index out of bounds". It must instead 0-extend to 0.
+    {
+        const rlp = [_]u8{0x80};
+        var out: u8 = 0xaa;
+        const consumed = try deserialize(u8, std.testing.allocator, &rlp, &out);
+        try std.testing.expectEqual(@as(usize, 1), consumed);
+        try std.testing.expectEqual(@as(u8, 0), out);
+    }
+    // 0xc0 is an empty list; its value region is also zero-length. This is the exact
+    // devp2p Disconnect `[]` payload that crashed a real decode.
+    {
+        const rlp = [_]u8{0xc0};
+        var out: u8 = 0xaa;
+        const consumed = try deserialize(u8, std.testing.allocator, &rlp, &out);
+        try std.testing.expectEqual(@as(usize, 1), consumed);
+        try std.testing.expectEqual(@as(u8, 0), out);
+    }
+    // A value wider than the target type is rejected, not truncated or panicked.
+    {
+        const rlp = [_]u8{ 0x82, 0x03, 0xe8 }; // 2-byte string 0x03e8
+        var out: u8 = 0;
+        try std.testing.expectError(error.RlpIntPayloadTooLong, deserialize(u8, std.testing.allocator, &rlp, &out));
+    }
 }

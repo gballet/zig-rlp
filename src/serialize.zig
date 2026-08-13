@@ -5,7 +5,8 @@ const Allocator = std.mem.Allocator;
 const hasFn = std.meta.hasFn;
 
 pub const deserialize = @import("deserialize.zig").deserialize;
-const constants = @import("constants.zig");
+const common = @import("common.zig");
+const sizeAndDataOffset = common.sizeAndDataOffset;
 
 fn writeLengthLength(length: usize, list: *ArrayList(u8)) !u8 {
     var enc_length_buf: [8]u8 = undefined;
@@ -18,13 +19,14 @@ fn writeLengthLength(length: usize, list: *ArrayList(u8)) !u8 {
 pub const SerializationError = error{
     UnsupportedType,
     OutOfMemory,
+    EmptyRawValue,
 };
 
-const rlpByteListShortHeader = constants.rlpByteListShortHeader;
-const rlpByteListLongHeader = constants.rlpByteListLongHeader;
-const rlpListShortHeader = constants.rlpListShortHeader;
-const rlpListLongHeader = constants.rlpListLongHeader;
-const rlpShortMaxLen = constants.rlpShortMaxLen;
+const rlpByteListShortHeader = common.rlpByteListShortHeader;
+const rlpByteListLongHeader = common.rlpByteListLongHeader;
+const rlpListShortHeader = common.rlpListShortHeader;
+const rlpListLongHeader = common.rlpListLongHeader;
+const rlpShortMaxLen = common.rlpShortMaxLen;
 
 pub fn serialize(comptime T: type, allocator: Allocator, data: T, list: *ArrayList(u8)) SerializationError!void {
     if (comptime hasFn(T, "encodeToRLP")) {
@@ -180,18 +182,31 @@ pub fn serialize(comptime T: type, allocator: Allocator, data: T, list: *ArrayLi
 }
 
 pub const RawRLPValue = union(enum) {
-    value: []const u8,
-    list: []const RawRLPValue,
+    value: []const u8, // already-encoded RLP; emitted verbatim
+    list: []const RawRLPValue, // children wrapped with an RLP list header
 
     pub fn encodeToRLP(self: RawRLPValue, allocator: Allocator, list: *ArrayList(u8)) !void {
         return switch (self) {
             .value => |v| {
-                try serialize([]const u8, allocator, v, list);
+                // An empty raw value has no RLP encoding (even the empty byte
+                // string is 0x80), and emitting nothing would corrupt any
+                // enclosing list: the header is computed over the body that
+                // silently lost an element.
+                if (v.len == 0) return error.EmptyRawValue;
+                try list.appendSlice(v);
             },
             .list => |v| {
                 try serialize([]const RawRLPValue, allocator, v, list);
             },
         };
+    }
+
+    pub fn decodeFromRLP(self: *RawRLPValue, _: Allocator, serialized: []const u8) !usize {
+        const r = try sizeAndDataOffset(serialized);
+        if (r.size > serialized.len - r.offset) return error.RlpPayloadTooShort;
+        const consumed = r.offset + r.size;
+        self.* = .{ .value = serialized[0..consumed] };
+        return consumed;
     }
 };
 
@@ -418,55 +433,79 @@ test "one byte slicei with value > 128" {
     try std.testing.expectEqualSlices(u8, &[_]u8{ 0x81, 0xff }, out.items);
 }
 
-test "raw rlp" {
+test "raw rlp value is verbatim, list wraps" {
     const allocator = std.testing.allocator;
-    {
-        var out_generic = ArrayList(u8).init(allocator);
-        defer out_generic.deinit();
-        const generic: RawRLPValue = .{ .value = "hello" };
-        try serialize(RawRLPValue, allocator, generic, &out_generic);
+    var out = ArrayList(u8).init(allocator);
+    defer out.deinit();
 
-        var out = ArrayList(u8).init(allocator);
-        defer out.deinit();
-        const normal = "hello";
-        try serialize([]const u8, allocator, normal, &out);
+    // .value holds already-encoded RLP and is emitted as-is.
+    try serialize(RawRLPValue, allocator, RawRLPValue{ .value = &([_]u8{0x85} ++ "hello".*) }, &out);
+    try testing.expectEqualSlices(u8, &([_]u8{0x85} ++ "hello".*), out.items);
 
-        try std.testing.expectEqualSlices(u8, out.items, out_generic.items);
-    }
-    {
-        var out_generic = ArrayList(u8).init(allocator);
-        defer out_generic.deinit();
-        const generic: RawRLPValue = .{ .list = &[_]RawRLPValue{ .{ .value = "hello" }, .{ .value = "world" } } };
-        try serialize(RawRLPValue, allocator, generic, &out_generic);
+    // .list wraps its raw children with a freshly computed list header.
+    out.clearRetainingCapacity();
+    try serialize(RawRLPValue, allocator, RawRLPValue{ .list = &[_]RawRLPValue{
+        .{ .value = &([_]u8{0x85} ++ "hello".*) },
+        .{ .value = &([_]u8{0x85} ++ "world".*) },
+    } }, &out);
+    try testing.expectEqualSlices(u8, &([_]u8{0xcc} ++ [_]u8{0x85} ++ "hello".* ++ [_]u8{0x85} ++ "world".*), out.items);
+}
 
-        var out = ArrayList(u8).init(allocator);
-        defer out.deinit();
-        var normal = [_][]const u8{ "hello", "world" };
-        try serialize([]const []const u8, allocator, &normal, &out);
+test "raw rlp captures items verbatim" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
 
-        try std.testing.expectEqualSlices(u8, out.items, out_generic.items);
-    }
-    {
-        var out_generic = ArrayList(u8).init(allocator);
-        defer out_generic.deinit();
-        const generic: RawRLPValue = .{
-            .list = &[_]RawRLPValue{
-                .{ .value = "hello" },
-                .{ .value = "world" },
-                .{ .list = &[_]RawRLPValue{.{ .value = "nested" }} },
-            },
-        };
-        try serialize(RawRLPValue, allocator, generic, &out_generic);
+    // [ "hello", "world", [ "nested" ] ] in canonical RLP.
+    const encoded = [_]u8{0xd4} ++
+        [_]u8{0x85} ++ "hello".* ++
+        [_]u8{0x85} ++ "world".* ++
+        [_]u8{ 0xc7, 0x86 } ++ "nested".*;
 
-        var out = ArrayList(u8).init(allocator);
-        defer out.deinit();
-        const normal: struct { a: []const u8, b: []const u8, c: []const []const u8 } = .{
-            .a = "hello",
-            .b = "world",
-            .c = &[_][]const u8{"nested"},
-        };
-        try serialize(@TypeOf(normal), allocator, normal, &out);
+    // As a single value: the whole item is captured verbatim (not split).
+    var whole: RawRLPValue = undefined;
+    try testing.expectEqual(encoded.len, try deserialize(RawRLPValue, a, &encoded, &whole));
+    try testing.expectEqualSlices(u8, &encoded, whole.value);
 
-        try std.testing.expectEqualSlices(u8, out.items, out_generic.items);
-    }
+    // As a slice: the list is split one level, each element captured verbatim
+    // (the nested list is NOT descended into).
+    var items: []RawRLPValue = undefined;
+    try testing.expectEqual(encoded.len, try deserialize([]RawRLPValue, a, &encoded, &items));
+    try testing.expectEqual(@as(usize, 3), items.len);
+    try testing.expectEqualSlices(u8, &([_]u8{0x85} ++ "hello".*), items[0].value);
+    try testing.expectEqualSlices(u8, &([_]u8{ 0xc7, 0x86 } ++ "nested".*), items[2].value);
+
+    // Re-encoding the elements reproduces the original list.
+    var reencoded = ArrayList(u8).init(a);
+    try serialize([]const RawRLPValue, a, items, &reencoded);
+    try testing.expectEqualSlices(u8, &encoded, reencoded.items);
+}
+
+test "raw rlp decode rejects a length that overflows usize" {
+    // 0xbf = 0xb7 + 8: a byte-string header carrying an 8-byte length field
+    // whose value is 0xffff_ffff_ffff_ffff. The header itself consumes 9
+    // bytes, so computing `r.offset + r.size` unchecked wraps usize: a panic
+    // on untrusted input in safe modes, and in ReleaseFast the wrapped sum
+    // slips past the bounds check and yields a bogus 8-byte value. The size
+    // must be checked against the remaining buffer before adding the offset.
+    const evil = [_]u8{ 0xbf, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
+    var out: RawRLPValue = undefined;
+    try testing.expectError(error.RlpPayloadTooShort, deserialize(RawRLPValue, std.testing.allocator, &evil, &out));
+}
+
+test "raw rlp rejects an empty raw value" {
+    const allocator = testing.allocator;
+    var out = ArrayList(u8).init(allocator);
+    defer out.deinit();
+
+    // Top-level: there is nothing to emit, and emitting nothing is not RLP.
+    try testing.expectError(error.EmptyRawValue, serialize(RawRLPValue, allocator, RawRLPValue{ .value = &[_]u8{} }, &out));
+
+    // Nested in a list: previously the list header was computed over the
+    // body with the empty element silently dropped (c1 01 for two elements,
+    // which decodes back to one). The child serialization hits the same check.
+    try testing.expectError(error.EmptyRawValue, serialize(RawRLPValue, allocator, RawRLPValue{ .list = &[_]RawRLPValue{
+        .{ .value = &[_]u8{} },
+        .{ .value = &[_]u8{0x01} },
+    } }, &out));
 }
