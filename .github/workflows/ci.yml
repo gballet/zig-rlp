@@ -46,6 +46,19 @@ jobs:
         with:
           zig-version: 0.16.0
 
+      - name: Cache the vectors submodule
+        id: vectors
+        uses: actions/cache@v4
+        with:
+          path: |
+            ethereum-tests
+            .git/modules/ethereum-tests
+          key: ethereum-tests-${{ steps.pin.outputs.sha }}
+
+      - name: Sync the vectors submodule
+        if: steps.vectors.outputs.cache-hit != 'true'
+        run: git submodule update --init --depth 1 --recursive ethereum-tests
+
       - name: Test
         run: zig build test --summary all
 
@@ -62,5 +75,19 @@ jobs:
         with:
           zig-version: 0.16.0
 
+      - name: Resolve the pinned vectors revision
+        id: pin
+        run: echo "sha=$(git rev-parse HEAD:ethereum-tests)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache the vectors submodule
+        id: vectors
+        uses: actions/cache@v4
+        with:
+          path: |
+            ethereum-tests
+            .git/modules/ethereum-tests
+          key: ethereum-tests-${{ steps.pin.outputs.sha }}
+
+      - name: Sync the vectors submodule
       - name: Test
         run: zig build test --summary all -fqemu -Dtarget=mips64-linux

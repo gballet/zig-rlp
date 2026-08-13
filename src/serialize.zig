@@ -41,6 +41,9 @@ pub fn serialize(comptime T: type, allocator: Allocator, data: T, list: *ArrayLi
                 .signed => @compileError("RLP does not support signed integers; use an unsigned type instead"),
             };
             comptime {
+                // Mirror the deserializer's restriction: writeInt below requires
+                // @sizeOf(T) to be exactly the value's byte width, and a type
+                // that cannot be decoded again is useless to encode.
                 const bits = @typeInfo(T).int.bits;
                 if (bits < 8 or !std.math.isPowerOfTwo(bits)) {
                     @compileError("RLP integers must have a power-of-two bit width of at least 8; got " ++ @typeName(T));
@@ -51,18 +54,21 @@ pub fn serialize(comptime T: type, allocator: Allocator, data: T, list: *ArrayLi
                 1...127 => list.append(@truncate(data)),
 
                 else => {
-                    // write integer to temp buffer so that it can
-                    // be left-trimmed.
+                    // Write the value big-endian to a temp buffer so that the
+                    // leading zero bytes can be trimmed off: RLP integers carry
+                    // no leading zeros.
                     var int_buf: [@sizeOf(T)]u8 = undefined;
                     std.mem.writeInt(T, &int_buf, data, .big);
                     const payload = std.mem.trimStart(u8, &int_buf, &[_]u8{0});
 
-                    // copy final header + trimmed data
-                    try list.append(@as(u8, @truncate(128 + tlist.items.len - start_offset)));
-                    _ = try list.appendSlice(tlist.items[start_offset..]);
                     if (payload.len <= rlpShortMaxLen) {
                         try list.append(rlpByteListShortHeader + @as(u8, @intCast(payload.len)));
                     } else {
+                        // u448 and wider can hold more than 55 significant
+                        // bytes, which requires the long form: 0xb7 + the width
+                        // of the length, followed by the length itself.
+                        // Emitting 0x80 + len here would overflow into the list
+                        // header range and silently corrupt the encoding.
                         const header_offset = list.items.len;
                         try list.append(0);
                         const length_length = try writeLengthLength(payload.len, list);
@@ -186,6 +192,9 @@ pub fn serialize(comptime T: type, allocator: Allocator, data: T, list: *ArrayLi
             try list.append(0x80);
         },
         .bool => {
+            // Canonical RLP encodes false as the empty byte string (0x80), the
+            // same as the integer 0. A raw 0x00 is a one-byte string whose
+            // value happens to be zero, which is a different RLP item.
             try list.append(if (data) 1 else rlpByteListShortHeader);
         },
         else => return error.UnsupportedType,
@@ -346,6 +355,9 @@ test "serialize a boolean" {
     var list = ArrayList(u8).init(testing.allocator);
     defer list.deinit();
 
+    // false is the empty byte string, exactly like the integer 0; emitting a
+    // bare 0x00 would encode a one-byte string instead, which does not decode
+    // back to a boolean under a canonical decoder.
     try serialize(bool, testing.allocator, false, &list);
     try testing.expectEqualSlices(u8, &[_]u8{0x80}, list.items);
 
@@ -543,15 +555,22 @@ test "serialize an integer whose payload exceeds 55 bytes" {
     try serialize(u512, testing.allocator, short_max, &list);
     try testing.expectEqualSlices(u8, &([_]u8{0xb7} ++ [_]u8{0xff} ** 55), list.items);
 
+    // 56 bytes crosses into the long form. Emitting 0x80 + 56 here would
+    // produce 0xb8 as a *short* header, and beyond that the byte would run
+    // into the list header range (0xc0+), silently reinterpreting the integer
+    // as a list.
     list.clearRetainingCapacity();
     const long_min: u512 = (@as(u512, 1) << 448) - 1;
     try serialize(u512, testing.allocator, long_min, &list);
     try testing.expectEqualSlices(u8, &([_]u8{ 0xb8, 0x38 } ++ [_]u8{0xff} ** 56), list.items);
 
+    // Full-width u512: 64 bytes. This is the case that used to emit 0xc0, the
+    // empty-list header, which decoded back to 0.
     list.clearRetainingCapacity();
     try serialize(u512, testing.allocator, std.math.maxInt(u512), &list);
     try testing.expectEqualSlices(u8, &([_]u8{ 0xb8, 0x40 } ++ [_]u8{0xff} ** 64), list.items);
 
+    // A payload longer than 255 bytes needs two length bytes.
     list.clearRetainingCapacity();
     try serialize(u4096, testing.allocator, std.math.maxInt(u4096), &list);
     try testing.expectEqualSlices(u8, &([_]u8{ 0xb9, 0x02, 0x00 } ++ [_]u8{0xff} ** 512), list.items);
@@ -581,6 +600,8 @@ test "serialize a pointer to a single item" {
     try serialize(*const u16, testing.allocator, &v, &list);
     try testing.expectEqualSlices(u8, &[_]u8{ 0x82, 0xab, 0xcd }, list.items);
 
+    // The pointee is followed transparently, so a pointer to a struct encodes
+    // exactly like the struct itself.
     list.clearRetainingCapacity();
     const Pair = struct { a: u8, b: u8 };
     const pair = Pair{ .a = 1, .b = 2 };
@@ -592,11 +613,14 @@ test "serialize a slice of non-byte items with a payload over 55 bytes" {
     var list = ArrayList(u8).init(testing.allocator);
     defer list.deinit();
 
+    // 20 items x 3 bytes each = 60 bytes of payload, which needs the long list
+    // form. Only the fixed-array variant of this path was covered before.
     const backing = [_]u16{0xabcd} ** 20;
     const items: []const u16 = &backing;
     try serialize([]const u16, testing.allocator, items, &list);
     try testing.expectEqualSlices(u8, &([_]u8{ 0xf8, 0x3c } ++ [_]u8{ 0x82, 0xab, 0xcd } ** 20), list.items);
 
+    // Same payload, but long enough to need a two-byte length.
     list.clearRetainingCapacity();
     const big_backing = [_]u16{0xabcd} ** 100;
     const big_items: []const u16 = &big_backing;
@@ -611,10 +635,12 @@ test "serialize an empty byte array and single high bytes" {
     try serialize([0]u8, testing.allocator, [_]u8{}, &list);
     try testing.expectEqualSlices(u8, &[_]u8{0x80}, list.items);
 
+    // A single byte below 0x80 is its own encoding, with no header.
     list.clearRetainingCapacity();
     try serialize([1]u8, testing.allocator, [_]u8{0x7f}, &list);
     try testing.expectEqualSlices(u8, &[_]u8{0x7f}, list.items);
 
+    // 0x80 and above need the one-byte-string header.
     list.clearRetainingCapacity();
     try serialize([1]u8, testing.allocator, [_]u8{0x80}, &list);
     try testing.expectEqualSlices(u8, &[_]u8{ 0x81, 0x80 }, list.items);
@@ -632,6 +658,7 @@ test "serialize an empty slice and an empty struct" {
     try serialize([]const u8, testing.allocator, empty, &list);
     try testing.expectEqualSlices(u8, &[_]u8{0x80}, list.items);
 
+    // An empty list of non-byte items is the empty list, not the empty string.
     list.clearRetainingCapacity();
     const empty_ints: []const u16 = &[_]u16{};
     try serialize([]const u16, testing.allocator, empty_ints, &list);
@@ -649,6 +676,7 @@ test "serialize rejects unsupported types" {
     try testing.expectError(error.UnsupportedType, serialize(f32, testing.allocator, 1.5, &list));
     try testing.expectError(error.UnsupportedType, serialize(enum { a, b }, testing.allocator, .a, &list));
 
+    // Many-pointers carry no length, so there is nothing to encode.
     const backing = [_]u8{ 1, 2, 3 };
     const many: [*]const u8 = &backing;
     try testing.expectError(error.UnsupportedType, serialize([*]const u8, testing.allocator, many, &list));
@@ -661,6 +689,7 @@ test "serialize null and a populated optional" {
     try serialize(@TypeOf(null), testing.allocator, null, &list);
     try testing.expectEqualSlices(u8, &[_]u8{0x80}, list.items);
 
+    // A present optional encodes exactly like its payload: no extra wrapper.
     list.clearRetainingCapacity();
     try serialize(?u16, testing.allocator, 0xabcd, &list);
     try testing.expectEqualSlices(u8, &[_]u8{ 0x82, 0xab, 0xcd }, list.items);
@@ -670,11 +699,15 @@ test "round-trip random integers of every supported width" {
     var list = ArrayList(u8).init(testing.allocator);
     defer list.deinit();
 
+    // Fixed seed: a failure has to be reproducible.
     var prng = std.Random.DefaultPrng.init(0x5eed_1234_abcd_0001);
     const random = prng.random();
 
     inline for (.{ u8, u16, u32, u64, u128, u256, u512, u1024 }) |T| {
         for (0..256) |_| {
+            // Shifting a full-width random value right by a random amount
+            // covers every payload length, including 0 (the value 0) and the
+            // 55/56-byte short/long-form boundary for the wide types.
             var bytes: [@sizeOf(T)]u8 = undefined;
             random.bytes(&bytes);
             const v = std.mem.readInt(T, &bytes, .big) >> random.int(std.math.Log2Int(T));
@@ -687,6 +720,8 @@ test "round-trip random integers of every supported width" {
             try testing.expectEqual(list.items.len, consumed);
             try testing.expectEqual(v, out);
 
+            // The encoding is canonical, so re-encoding the decoded value must
+            // reproduce the exact same bytes.
             var again = ArrayList(u8).init(testing.allocator);
             defer again.deinit();
             try serialize(T, testing.allocator, out, &again);
@@ -703,6 +738,9 @@ test "round-trip random byte strings across the length boundaries" {
     var list = ArrayList(u8).init(testing.allocator);
     defer list.deinit();
 
+    // Lengths 0..300 cover the no-header case (1 byte < 0x80), the one-byte
+    // header, the 55/56-byte short/long-form boundary and the 255/256-byte
+    // one-to-two-length-byte boundary.
     for (0..301) |len| {
         const payload = buf[0..len];
         random.bytes(payload);

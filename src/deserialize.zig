@@ -158,6 +158,10 @@ pub fn deserialize(comptime T: type, allocator: Allocator, serialized: []const u
             const r = try sizeAndDataOffset(serialized);
             if (r.size > serialized.len - r.offset) return error.RlpPayloadTooShort;
             const payload = serialized[r.offset .. r.offset + r.size];
+            // Canonical RLP encodes false as the empty byte string (0x80) and
+            // true as 0x01. A bare 0x00 is accepted as false because encoders
+            // in the wild emit it (go-ethereum decodes it the same way), but it
+            // is never produced by the serializer.
             out.* = switch (payload.len) {
                 0 => false,
                 1 => switch (payload[0]) {
