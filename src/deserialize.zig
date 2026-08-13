@@ -49,7 +49,6 @@ pub fn deserialize(comptime T: type, allocator: Allocator, serialized: []const u
             }
             const r = try sizeAndDataOffset(serialized);
             if (r.size > serialized.len - r.offset) return error.RlpPayloadTooShort;
-            if (r.size > @sizeOf(T)) return error.RlpIntPayloadTooLong;
             try safeReadSliceIntBig(T, serialized[r.offset .. r.offset + r.size], out);
             return r.offset + r.size;
         },
