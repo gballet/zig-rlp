@@ -549,6 +549,8 @@ test "deserialize a boolean" {
 }
 
 test "deserialize a struct inside a struct with booleans" {
+    // Booleans inside a container: the field must consume exactly one byte so
+    // the fields after it stay aligned.
     const S = struct { a: bool, b: u16, c: bool };
     var list = ArrayList(u8).init(std.testing.allocator);
     defer list.deinit();
@@ -562,3 +564,119 @@ test "deserialize a struct inside a struct with booleans" {
     try std.testing.expectEqual(in, out);
 }
 
+test "deserialize a struct rejects malformed input" {
+    const S = struct { a: u8 };
+    var out: S = undefined;
+
+    // Nothing to read at all.
+    try expectError(error.EOF, deserialize(S, std.testing.allocator, &[_]u8{}, &out));
+
+    // A struct is a list; a byte-string header cannot start one.
+    try expectError(error.NotAnRLPList, deserialize(S, std.testing.allocator, &[_]u8{0x82}, &out));
+    try expectError(error.NotAnRLPList, deserialize(S, std.testing.allocator, &[_]u8{0x00}, &out));
+
+    // The list header claims more payload than the buffer holds.
+    try expectError(error.InvalidSerializedLength, deserialize(S, std.testing.allocator, &[_]u8{0xc4}, &out));
+}
+
+test "deserialize a slice rejects a non-list header" {
+    var out: []u32 = undefined;
+    // 0x82 is a byte-string header; a slice of non-byte items needs a list.
+    try expectError(error.NotAnRLPList, deserialize([]u32, std.testing.allocator, &[_]u8{ 0x82, 0x01, 0x02 }, &out));
+}
+
+test "deserialize rejects a list whose element overruns the payload" {
+    // 0xc3: list with 3 bytes of payload. The single element claims a 4-byte
+    // string (0x84) but only 2 bytes follow, so counting the items must fail
+    // instead of walking off the end.
+    const rlp = [_]u8{ 0xc3, 0x84, 0xde, 0xad };
+    var out: []u32 = undefined;
+    try expectError(error.RlpPayloadTooShort, deserialize([]u32, std.testing.allocator, &rlp, &out));
+}
+
+test "deserialize rejects a truncated length field" {
+    // 0xb9 announces a 2-byte length, but only one byte follows.
+    var out: []const u8 = undefined;
+    try expectError(error.RlpPayloadTooShort, deserialize([]const u8, std.testing.allocator, &[_]u8{ 0xb9, 0x01 }, &out));
+
+    // Same for the long-list header: 0xf9 announces two length bytes.
+    var list_out: []u32 = undefined;
+    try expectError(error.RlpPayloadTooShort, deserialize([]u32, std.testing.allocator, &[_]u8{ 0xf9, 0x01 }, &list_out));
+}
+
+test "deserialize rejects a byte string that overruns the buffer" {
+    // 0x85 claims 5 bytes of payload, only 2 are present.
+    var out: []const u8 = undefined;
+    try expectError(error.RlpPayloadTooShort, deserialize([]const u8, std.testing.allocator, &[_]u8{ 0x85, 0x01, 0x02 }, &out));
+
+    // Same guard for fixed-size arrays.
+    var ary: [5]u8 = undefined;
+    try expectError(error.RlpPayloadTooShort, deserialize([5]u8, std.testing.allocator, &[_]u8{ 0x85, 0x01, 0x02 }, &ary));
+
+    // A payload that fits the buffer but not the array is a length mismatch.
+    try expectError(error.RlpInvalidLength, deserialize([5]u8, std.testing.allocator, &[_]u8{ 0x82, 0x01, 0x02 }, &ary));
+}
+
+test "deserialize into a mutable byte slice copies the payload" {
+    // A const slice aliases the input; a mutable one must own its bytes, so it
+    // has to survive the source buffer being overwritten.
+    var src = [_]u8{ 0x83, 'a', 'b', 'c' };
+    var out: []u8 = undefined;
+    const consumed = try deserialize([]u8, std.testing.allocator, &src, &out);
+    defer std.testing.allocator.free(out);
+    try expect(consumed == src.len);
+    @memset(&src, 0);
+    try std.testing.expectEqualSlices(u8, "abc", out);
+}
+
+test "deserialize an optional held by an empty list header" {
+    // Both 0x80 and 0xc0 mark an absent optional, and each consumes one byte.
+    var out: ?u32 = 42;
+    try expect(try deserialize(?u32, std.testing.allocator, &[_]u8{0xc0}, &out) == 1);
+    try expect(out == null);
+
+    // Inside a container, the placeholder must keep the following fields aligned.
+    const S = struct { a: ?u32, b: u8 };
+    var s: S = undefined;
+    const consumed = try deserialize(S, std.testing.allocator, &[_]u8{ 0xc2, 0x80, 0x07 }, &s);
+    try expect(consumed == 3);
+    try expect(s.a == null);
+    try expect(s.b == 7);
+}
+
+test "deserialize rejects unsupported types" {
+    var f: f32 = undefined;
+    try expectError(error.UnsupportedType, deserialize(f32, std.testing.allocator, &[_]u8{0x80}, &f));
+
+    // Fixed-size arrays of non-byte items are not handled.
+    var ary: [2]u16 = undefined;
+    try expectError(error.UnsupportedType, deserialize([2]u16, std.testing.allocator, &[_]u8{0xc0}, &ary));
+}
+
+test "round-trip a nested structure" {
+    const Inner = struct { flag: bool, id: u64 };
+    const Outer = struct {
+        name: []const u8,
+        inner: Inner,
+        hash: [32]u8,
+        tail: ?u32,
+    };
+
+    var list = ArrayList(u8).init(std.testing.allocator);
+    defer list.deinit();
+    const in = Outer{
+        .name = "a name long enough to push the payload past fifty-five bytes",
+        .inner = .{ .flag = true, .id = 0xdead_beef_dead_beef },
+        .hash = [_]u8{0xab} ** 32,
+        .tail = 0x1234,
+    };
+    try serialize(Outer, std.testing.allocator, in, &list);
+
+    var out: Outer = undefined;
+    const consumed = try deserialize(Outer, std.testing.allocator, list.items, &out);
+    try expect(consumed == list.items.len);
+    try expect(eql(u8, in.name, out.name));
+    try std.testing.expectEqual(in.inner, out.inner);
+    try std.testing.expectEqual(in.hash, out.hash);
+    try std.testing.expectEqual(in.tail, out.tail);
+}
