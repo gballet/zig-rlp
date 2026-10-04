@@ -1,7 +1,15 @@
 # zig-rlp
 A zig implementation of RLP
 
-⚠️ Minimum-supported compiler version: ziglang's `0.16.0`
+⚠️ Minimum-supported compiler version: ziglang's `0.17.0`
+
+## Language compatibility table
+
+Each entry in this table tells the last supported version for each zig compiler version.
+
+|Release|Zig version|
+|-|-|
+|0.1.3|0.16.0|
 
 ## Testing
 
