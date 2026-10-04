@@ -70,11 +70,11 @@ pub fn deserialize(comptime T: type, allocator: Allocator, serialized: []const u
             const limit = r.offset + r.size;
 
             var offset = r.offset;
-            inline for (struc.fields) |field| {
+            inline for (struc.field_names, struc.field_types) |field_name, field_type| {
                 if (offset > limit) {
                     return error.OffsetOverflow;
                 }
-                offset += try deserialize(field.type, allocator, serialized[offset..limit], &@field(out.*, field.name));
+                offset += try deserialize(field_type, allocator, serialized[offset..limit], &@field(out.*, field_name));
             }
 
             return limit;
@@ -83,7 +83,7 @@ pub fn deserialize(comptime T: type, allocator: Allocator, serialized: []const u
             .slice => if (ptr.child == u8) {
                 const r = try sizeAndDataOffset(serialized);
                 if (r.size > serialized.len - r.offset) return error.RlpPayloadTooShort;
-                if (ptr.is_const) {
+                if (ptr.attrs.@"const") {
                     out.* = serialized[r.offset .. r.offset + r.size];
                 } else {
                     out.* = try allocator.alloc(ptr.child, r.size);
@@ -399,7 +399,7 @@ test "deserialize a 55-byte string (0xb7 prefix)" {
     // 0xb7 == 0x80 + 55 is the short-string header for a 55-byte payload.
     // we treated 0xb7 as the long-string sentinel (size_size=0),
     // silently returning an empty string instead of the 55-byte payload.
-    const data = [_]u8{0xAB} ** 55;
+    const data: [55]u8 = @splat(0xAB);
     var rlp_bytes: [56]u8 = undefined;
     rlp_bytes[0] = 0xb7;
     @memcpy(rlp_bytes[1..], &data);
@@ -671,7 +671,7 @@ test "round-trip a nested structure" {
     const in = Outer{
         .name = "a name long enough to push the payload past fifty-five bytes",
         .inner = .{ .flag = true, .id = 0xdead_beef_dead_beef },
-        .hash = [_]u8{0xab} ** 32,
+        .hash = @splat(0xab),
         .tail = 0x1234,
     };
     try serialize(Outer, std.testing.allocator, in, &list);

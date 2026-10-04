@@ -16,7 +16,7 @@ pub fn build(b: *Build) void {
 
     const lib = b.addLibrary(.{
         .name = "zig-rlp",
-        .root_module = b.createModule(.{ 
+        .root_module = b.createModule(.{
             .root_source_file = b.path("src/serialize.zig"),
             .target = target,
             .optimize = optimize,
@@ -26,18 +26,10 @@ pub fn build(b: *Build) void {
     b.installArtifact(lib);
 
     var main_tests = b.addRunArtifact(b.addTest(.{
-        .root_module = b.createModule(.{ 
-            .root_source_file = b.path("src/serialize.zig"),
-            .target = target, 
-            .optimize = optimize 
-        }),
+        .root_module = b.createModule(.{ .root_source_file = b.path("src/serialize.zig"), .target = target, .optimize = optimize }),
     }));
     var deser_tests = b.addRunArtifact(b.addTest(.{
-        .root_module = b.createModule(.{ 
-            .root_source_file = b.path("src/deserialize.zig"),
-            .target = target, 
-            .optimize = optimize 
-        }),
+        .root_module = b.createModule(.{ .root_source_file = b.path("src/deserialize.zig"), .target = target, .optimize = optimize }),
     }));
 
     const test_step = b.step("test", "Run library tests");
@@ -45,9 +37,8 @@ pub fn build(b: *Build) void {
     test_step.dependOn(&deser_tests.step);
     const have_vectors = blk: {
         const io = b.graph.io;
-        const root = b.build_root.handle;
-        root.access(io, rlptest_json, .{}) catch break :blk false;
-        root.access(io, invalid_rlptest_json, .{}) catch break :blk false;
+        b.root.access(io, rlptest_json, .{}) catch break :blk false;
+        b.root.access(io, invalid_rlptest_json, .{}) catch break :blk false;
         break :blk true;
     };
 
