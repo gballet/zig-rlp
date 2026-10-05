@@ -28,14 +28,6 @@ const rlpListShortHeader = common.rlpListShortHeader;
 const rlpListLongHeader = common.rlpListLongHeader;
 const rlpShortMaxLen = common.rlpShortMaxLen;
 
-/// Used to replace `**` now that it has been removed from the language.
-fn repeat(comptime pattern: anytype, comptime n: usize) [pattern.len * n]@TypeOf(pattern[0]) {
-    @setEvalBranchQuota(n * 2 * 100);
-    var out: [pattern.len * n]@TypeOf(pattern[0]) = undefined;
-    for (0..n) |i| @memcpy(out[i * pattern.len ..][0..pattern.len], &pattern);
-    return out;
-}
-
 pub fn serialize(comptime T: type, allocator: Allocator, data: T, list: *ArrayList(u8)) SerializationError!void {
     if (comptime hasFn(T, "encodeToRLP")) {
         return data.encodeToRLP(allocator, list);
@@ -304,7 +296,7 @@ test "serialize a u16 array" {
     list.clearRetainingCapacity();
     const src16x1K: [1024]u16 = @splat(0xabcd);
     try serialize(@TypeOf(src16x1K), testing.allocator, src16x1K, &list);
-    const expected16x1K = [_]u8{ 0xf9, 0x0C, 0 } ++ comptime repeat([_]u8{ 130, 0xab, 0xcd }, 1024);
+    const expected16x1K = [_]u8{ 0xf9, 0x0C, 0 } ++ std.mem.toBytes(@as([1024][3]u8, @splat(.{ 0x82, 0xab, 0xcd })));
     try testing.expect(std.mem.eql(u8, list.items[0..], expected16x1K[0..]));
 }
 
@@ -626,14 +618,14 @@ test "serialize a slice of non-byte items with a payload over 55 bytes" {
     const backing: [20]u16 = @splat(0xabcd);
     const items: []const u16 = &backing;
     try serialize([]const u16, testing.allocator, items, &list);
-    try testing.expectEqualSlices(u8, &([_]u8{ 0xf8, 0x3c } ++ comptime repeat([_]u8{ 0x82, 0xab, 0xcd }, 20)), list.items);
+    try testing.expectEqualSlices(u8, &([_]u8{ 0xf8, 0x3c } ++ std.mem.toBytes(@as([20][3]u8, @splat(.{ 0x82, 0xab, 0xcd })))), list.items);
 
     // Same payload, but long enough to need a two-byte length.
     list.clearRetainingCapacity();
     const big_backing: [100]u16 = @splat(0xabcd);
     const big_items: []const u16 = &big_backing;
     try serialize([]const u16, testing.allocator, big_items, &list);
-    try testing.expectEqualSlices(u8, &([_]u8{ 0xf9, 0x01, 0x2c } ++ comptime repeat([_]u8{ 0x82, 0xab, 0xcd }, 100)), list.items);
+    try testing.expectEqualSlices(u8, &([_]u8{ 0xf9, 0x01, 0x2c } ++ std.mem.toBytes(@as([100][3]u8, @splat(.{ 0x82, 0xab, 0xcd })))), list.items);
 }
 
 test "serialize an empty byte array and single high bytes" {
