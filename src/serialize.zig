@@ -283,13 +283,13 @@ test "serialize a byte array" {
     list.clearRetainingCapacity();
     const src8x58: [58]u8 = @splat(0xab);
     try serialize([58]u8, testing.allocator, src8x58, &list);
-    const expected8x58 = [_]u8{ 0xb8, 0x3a } ++ comptime repeat([_]u8{0xab}, 58);
+    const expected8x58 = [_]u8{ 0xb8, 0x3a } ++ @as([58]u8, @splat(0xab));
     try testing.expect(std.mem.eql(u8, list.items[0..], expected8x58[0..]));
 
     list.clearRetainingCapacity();
     const src8x1K: [1024]u8 = @splat(0xab);
     try serialize(@TypeOf(src8x1K), testing.allocator, src8x1K, &list);
-    const expected8x1K = [_]u8{ 0xb9, 0x04, 0x00 } ++ comptime repeat([_]u8{0xab}, 1024);
+    const expected8x1K = [_]u8{ 0xb9, 0x04, 0x00 } ++ @as([1024]u8, @splat(0xab));
     try testing.expect(std.mem.eql(u8, list.items[0..], expected8x1K[0..]));
 }
 
@@ -440,10 +440,10 @@ test "access list filled" {
     var out: StrippedTxn = undefined;
     _ = try deserialize(StrippedTxn, testing.allocator, rlp, &out);
 
-    const expected_address = comptime repeat([_]u8{0}, 18) ++ [_]u8{ 0x12, 0x10 };
+    const expected_address = @as([18]u8, @splat(0)) ++ [_]u8{ 0x12, 0x10 };
     try testing.expectEqual(out.access_list[0].address, expected_address);
 
-    const expected_access = comptime repeat([_]u8{0}, 30) ++ [_]u8{ 2, 3 };
+    const expected_access = @as([30]u8, @splat(0)) ++ [_]u8{ 2, 3 };
     try testing.expectEqual(out.access_list[0].storage_keys[0], expected_access);
 
     testing.allocator.free(out.access_list[0].storage_keys);
@@ -561,7 +561,7 @@ test "serialize an integer whose payload exceeds 55 bytes" {
     // 55 significant bytes is the last size that fits the short form.
     const short_max: u512 = (@as(u512, 1) << 440) - 1;
     try serialize(u512, testing.allocator, short_max, &list);
-    try testing.expectEqualSlices(u8, &([_]u8{0xb7} ++ comptime repeat([_]u8{0xff}, 55)), list.items);
+    try testing.expectEqualSlices(u8, &([_]u8{0xb7} ++ @as([55]u8, @splat(0xff))), list.items);
 
     // 56 bytes crosses into the long form. Emitting 0x80 + 56 here would
     // produce 0xb8 as a *short* header, and beyond that the byte would run
@@ -570,18 +570,18 @@ test "serialize an integer whose payload exceeds 55 bytes" {
     list.clearRetainingCapacity();
     const long_min: u512 = (@as(u512, 1) << 448) - 1;
     try serialize(u512, testing.allocator, long_min, &list);
-    try testing.expectEqualSlices(u8, &([_]u8{ 0xb8, 0x38 } ++ comptime repeat([_]u8{0xff}, 56)), list.items);
+    try testing.expectEqualSlices(u8, &([_]u8{ 0xb8, 0x38 } ++ @as([56]u8, @splat(0xff))), list.items);
 
     // Full-width u512: 64 bytes. This is the case that used to emit 0xc0, the
     // empty-list header, which decoded back to 0.
     list.clearRetainingCapacity();
     try serialize(u512, testing.allocator, std.math.maxInt(u512), &list);
-    try testing.expectEqualSlices(u8, &([_]u8{ 0xb8, 0x40 } ++ comptime repeat([_]u8{0xff}, 64)), list.items);
+    try testing.expectEqualSlices(u8, &([_]u8{ 0xb8, 0x40 } ++ @as([64]u8, @splat(0xff))), list.items);
 
     // A payload longer than 255 bytes needs two length bytes.
     list.clearRetainingCapacity();
     try serialize(u4096, testing.allocator, std.math.maxInt(u4096), &list);
-    try testing.expectEqualSlices(u8, &([_]u8{ 0xb9, 0x02, 0x00 } ++ comptime repeat([_]u8{0xff}, 512)), list.items);
+    try testing.expectEqualSlices(u8, &([_]u8{ 0xb9, 0x02, 0x00 } ++ @as([512]u8, @splat(0xff))), list.items);
 }
 
 test "round-trip integers wider than 55 bytes" {
