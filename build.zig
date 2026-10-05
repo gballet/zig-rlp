@@ -58,4 +58,15 @@ pub fn build(b: *Build) void {
         const vector_tests = b.addRunArtifact(b.addTest(.{ .root_module = vectors_module }));
         test_step.dependOn(&vector_tests.step);
     }
+    const bench_exe = b.addExecutable(.{
+        .name = "rlp-bench",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/bench.zig"),
+            .target = target,
+            .optimize = if (optimize == .debug) .fast else optimize,
+            .link_libc = true,
+        }),
+    });
+    const bench_step = b.step("bench", "Build zig-out/bin/rlp-bench, a benchmark workload for poop");
+    bench_step.dependOn(&b.addInstallArtifact(bench_exe, .{}).step);
 }
