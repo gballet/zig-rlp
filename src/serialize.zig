@@ -29,7 +29,28 @@ const rlpListLongHeader = common.rlpListLongHeader;
 const rlpShortMaxLen = common.rlpShortMaxLen;
 
 pub fn serialize(comptime T: type, allocator: Allocator, data: T, list: *ArrayList(u8)) SerializationError!void {
+    return serializeImpl(T, allocator, data, list);
+}
+
+/// Like serialize, but without an allocator. Custom encoders of the
+/// `encodeToRLP(self, list)` form use this to serialize nested values; any
+/// type in `T` whose encoder takes an allocator is a compile error.
+pub fn serializeNoAlloc(comptime T: type, data: T, list: *ArrayList(u8)) SerializationError!void {
+    return serializeImpl(T, {}, data, list);
+}
+
+// `allocator` is either an Allocator, or void when the caller has none to
+// offer (serializeNoAlloc). Custom encoders may declare
+// `encodeToRLP(self, list)` to opt out of needing one; one that does need an
+// allocator is a compile error when none is available.
+fn serializeImpl(comptime T: type, allocator: anytype, data: T, list: *ArrayList(u8)) SerializationError!void {
     if (comptime hasFn(T, "encodeToRLP")) {
+        if (comptime @typeInfo(@TypeOf(T.encodeToRLP)).@"fn".param_types.len == 2) {
+            return data.encodeToRLP(list);
+        }
+        if (comptime @TypeOf(allocator) != Allocator) {
+            @compileError(@typeName(T) ++ ".encodeToRLP takes an allocator, but is being serialized without one (serializeNoAlloc or serializeToSlice); use serialize, or drop the allocator parameter");
+        }
         return data.encodeToRLP(allocator, list);
     }
     const info = @typeInfo(T);
@@ -102,40 +123,21 @@ pub fn serialize(comptime T: type, allocator: Allocator, data: T, list: *ArrayLi
                 }
                 _ = try list.appendSlice(data[0..]);
             } else {
-                var tlist = ArrayList(u8).init(allocator);
-                defer tlist.deinit();
+                const start = try beginList(list);
+                errdefer list.shrinkRetainingCapacity(start);
                 for (data) |item| {
-                    try serialize(info.array.child, allocator, item, &tlist);
+                    try serializeImpl(info.array.child, allocator, item, list);
                 }
-
-                if (tlist.items.len < 56) {
-                    try list.append(192 + @as(u8, @truncate(tlist.items.len)));
-                } else {
-                    const index = list.items.len;
-                    try list.append(0);
-                    const length = tlist.items.len;
-
-                    const length_length = try writeLengthLength(length, list);
-                    list.items[index] = 247 + length_length;
-                }
-                _ = try list.appendSlice(tlist.items);
+                try endList(list, start);
             }
         },
         .@"struct" => |sinfo| {
-            var tlist = ArrayList(u8).init(allocator);
-            defer tlist.deinit();
+            const start = try beginList(list);
+            errdefer list.shrinkRetainingCapacity(start);
             inline for (sinfo.field_names, sinfo.field_types) |field_name, field_type| {
-                try serialize(field_type, allocator, @field(data, field_name), &tlist);
+                try serializeImpl(field_type, allocator, @field(data, field_name), list);
             }
-            if (tlist.items.len < 56) {
-                try list.append(192 + @as(u8, @truncate(tlist.items.len)));
-            } else {
-                const index = list.items.len;
-                try list.append(0);
-                const length_length = try writeLengthLength(tlist.items.len, list);
-                list.items[index] = 247 + length_length;
-            }
-            _ = try list.appendSlice(tlist.items);
+            try endList(list, start);
         },
         .pointer => |ptr| {
             switch (ptr.size) {
@@ -157,26 +159,16 @@ pub fn serialize(comptime T: type, allocator: Allocator, data: T, list: *ArrayLi
                         }
                         _ = try list.appendSlice(data);
                     } else {
-                        var tlist = ArrayList(u8).init(allocator);
-                        defer tlist.deinit();
+                        const start = try beginList(list);
+                        errdefer list.shrinkRetainingCapacity(start);
                         for (data) |item| {
-                            try serialize(ptr.child, allocator, item, &tlist);
+                            try serializeImpl(ptr.child, allocator, item, list);
                         }
-
-                        if (tlist.items.len < 56) {
-                            try list.append(192 + @as(u8, @truncate(tlist.items.len)));
-                        } else {
-                            const index = list.items.len;
-                            try list.append(0);
-                            const length_length: u8 = try writeLengthLength(tlist.items.len, list);
-
-                            list.items[index] = 247 + length_length;
-                        }
-                        _ = try list.appendSlice(tlist.items);
+                        try endList(list, start);
                     }
                 },
                 .one => {
-                    try serialize(ptr.child, allocator, data.*, list);
+                    try serializeImpl(ptr.child, allocator, data.*, list);
                 },
                 else => return error.UnsupportedType,
             }
@@ -185,7 +177,7 @@ pub fn serialize(comptime T: type, allocator: Allocator, data: T, list: *ArrayLi
             if (data == null) {
                 try list.append(0x80);
             } else {
-                try serialize(opt.child, allocator, data.?, list);
+                try serializeImpl(opt.child, allocator, data.?, list);
             }
         },
         .null => {
@@ -201,11 +193,52 @@ pub fn serialize(comptime T: type, allocator: Allocator, data: T, list: *ArrayLi
     };
 }
 
+// List headers depend on the payload length, which isn't known until the
+// payload is written. beginList reserves a one-byte placeholder in front of
+// the payload, and endList patches it once the payload is in place.
+fn beginList(list: *ArrayList(u8)) !usize {
+    const start = list.items.len;
+    try list.append(0);
+    return start;
+}
+
+fn endList(list: *ArrayList(u8), start: usize) !void {
+    const payload_len = list.items.len - start - 1;
+    if (payload_len <= rlpShortMaxLen) {
+        list.items[start] = rlpListShortHeader + @as(u8, @intCast(payload_len));
+        return;
+    }
+    // Long form: the length bytes go between the header byte and the
+    // payload, so shift the payload right to make room for them.
+    var enc_length_buf: [8]u8 = undefined;
+    std.mem.writeInt(u64, &enc_length_buf, payload_len, .big);
+    const enc_length = std.mem.trimStart(u8, &enc_length_buf, &[_]u8{0});
+    try list.insertSlice(start + 1, enc_length);
+    list.items[start] = rlpListLongHeader + @as(u8, @intCast(enc_length.len));
+}
+
+/// Serializes `data` into `buf` without touching the heap, and returns the
+/// encoded prefix of `buf`. Fails with error.OutOfMemory if the encoding does
+/// not fit.
+///
+/// No allocator is handed to custom encoders, so any type in `T` that defines
+/// `encodeToRLP` must use the `encodeToRLP(self, list)` form; the form taking
+/// an allocator is rejected at compile time.
+pub fn serializeToSlice(comptime T: type, data: T, buf: []u8) SerializationError![]u8 {
+    var fba = std.heap.FixedBufferAllocator.init(buf);
+    // Claim the whole buffer up front: letting the list grow on demand would
+    // request rounded-up capacities that can overshoot `buf` even when the
+    // encoding itself fits.
+    var list = try ArrayList(u8).initCapacity(fba.allocator(), buf.len);
+    try serializeNoAlloc(T, data, &list);
+    return list.items;
+}
+
 pub const RawRLPValue = union(enum) {
     value: []const u8, // already-encoded RLP; emitted verbatim
     list: []const RawRLPValue, // children wrapped with an RLP list header
 
-    pub fn encodeToRLP(self: RawRLPValue, allocator: Allocator, list: *ArrayList(u8)) !void {
+    pub fn encodeToRLP(self: RawRLPValue, list: *ArrayList(u8)) !void {
         return switch (self) {
             .value => |v| {
                 // An empty raw value has no RLP encoding (even the empty byte
@@ -216,7 +249,7 @@ pub const RawRLPValue = union(enum) {
                 try list.appendSlice(v);
             },
             .list => |v| {
-                try serialize([]const RawRLPValue, allocator, v, list);
+                try serializeNoAlloc([]const RawRLPValue, v, list);
             },
         };
     }
@@ -440,6 +473,73 @@ test "access list filled" {
 
     testing.allocator.free(out.access_list[0].storage_keys);
     testing.allocator.free(out.access_list);
+}
+
+test "serialize into a fixed buffer" {
+    const Person = struct {
+        name: []const u8,
+        age: u8,
+    };
+    const person = Person{ .name = "Bob", .age = 0x2a };
+
+    var buf: [16]u8 = undefined;
+    const encoded = try serializeToSlice(Person, person, &buf);
+    try testing.expectEqualSlices(u8, &[_]u8{ 0xc5, 0x83, 'B', 'o', 'b', 0x2a }, encoded);
+    try testing.expectEqual(@as([*]u8, &buf), encoded.ptr);
+
+    // An exact fit must succeed.
+    var exact: [6]u8 = undefined;
+    try testing.expectEqualSlices(u8, encoded, try serializeToSlice(Person, person, &exact));
+
+    // A long list header grows the encoding in place and must still fit.
+    const long: [60]u8 = @splat(0x44);
+    var long_buf: [64]u8 = undefined;
+    const long_encoded = try serializeToSlice([]const []const u8, &[_][]const u8{&long}, &long_buf);
+    try testing.expectEqualSlices(u8, &[_]u8{ 0xf8, 62, 0xb8, 60 }, long_encoded[0..4]);
+    try testing.expectEqualSlices(u8, &long, long_encoded[4..]);
+    try testing.expectEqual(@as(usize, 64), long_encoded.len);
+}
+
+const AllocatorFreeEncoder = struct {
+    // Wider than a byte, so that a slice of these isn't taken for a string.
+    x: u16,
+
+    pub fn encodeToRLP(self: AllocatorFreeEncoder, list: *ArrayList(u8)) !void {
+        return list.append(@truncate(self.x));
+    }
+};
+
+// Wraps its items in an extra list, serializing them through serializeNoAlloc.
+const AllocatorFreeWrapper = struct {
+    items: []const AllocatorFreeEncoder,
+
+    pub fn encodeToRLP(self: AllocatorFreeWrapper, list: *ArrayList(u8)) !void {
+        return serializeNoAlloc(struct { []const AllocatorFreeEncoder }, .{self.items}, list);
+    }
+};
+
+test "serialize into a fixed buffer with custom encoders" {
+    var buf: [16]u8 = undefined;
+    const encoded = try serializeToSlice([]const AllocatorFreeEncoder, &.{ .{ .x = 5 }, .{ .x = 6 } }, &buf);
+    try testing.expectEqualSlices(u8, &[_]u8{ 0xc2, 5, 6 }, encoded);
+
+    const raw = RawRLPValue{ .list = &.{ .{ .value = &.{0x01} }, .{ .value = &.{ 0x82, 0xab, 0xcd } } } };
+    try testing.expectEqualSlices(u8, &[_]u8{ 0xc4, 0x01, 0x82, 0xab, 0xcd }, try serializeToSlice(RawRLPValue, raw, &buf));
+
+    const nested = AllocatorFreeWrapper{ .items = &.{ .{ .x = 1 }, .{ .x = 2 } } };
+    try testing.expectEqualSlices(u8, &[_]u8{ 0xc3, 0xc2, 1, 2 }, try serializeToSlice(AllocatorFreeWrapper, nested, &buf));
+
+    // The allocator-free form is also accepted by serialize.
+    var list = ArrayList(u8).init(testing.allocator);
+    defer list.deinit();
+    try serialize(AllocatorFreeEncoder, testing.allocator, .{ .x = 7 }, &list);
+    try testing.expectEqualSlices(u8, &[_]u8{7}, list.items);
+}
+
+test "serialize into a fixed buffer that is too small" {
+    var buf: [5]u8 = undefined;
+    try testing.expectError(error.OutOfMemory, serializeToSlice([]const u8, "hello", &buf));
+    try testing.expectError(error.OutOfMemory, serializeToSlice([]const u8, "hello", buf[0..0]));
 }
 
 test "one byte slice" {
