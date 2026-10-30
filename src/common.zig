@@ -18,6 +18,21 @@ pub inline fn safeReadSliceIntBig(comptime T: type, payload: []const u8, out: *T
     out.* = std.mem.readVarInt(T, payload, .big);
 }
 
+// Long-form lengths must be minimal: no leading zero bytes, and only used for
+// payloads that don't fit the short form.
+fn readLongSize(payload: []const u8, size_size: usize) !usize {
+    if (payload.len < 1 + size_size) {
+        return error.RlpPayloadTooShort;
+    }
+    const size_bytes = payload[1 .. 1 + size_size];
+    if (size_bytes[0] == 0) return error.RlpNonCanonicalSize;
+
+    var size: usize = undefined;
+    try safeReadSliceIntBig(usize, size_bytes, &size);
+    if (size <= rlpShortMaxLen) return error.RlpNonCanonicalSize;
+    return size;
+}
+
 // Returns the size of the payload as well as the offset to the
 // start of the actual data.
 pub fn sizeAndDataOffset(payload: []const u8) !struct { size: usize, offset: usize } {
@@ -34,26 +49,20 @@ pub fn sizeAndDataOffset(payload: []const u8) !struct { size: usize, offset: usi
     } else if (payload[0] <= rlpByteListLongHeader) {
         size = @as(usize, payload[0] - rlpByteListShortHeader);
         offset = 1;
+        // A single byte below 0x80 is its own encoding.
+        if (size == 1 and payload.len > 1 and payload[1] < rlpByteListShortHeader) {
+            return error.RlpNonCanonicalSize;
+        }
     } else if (payload[0] < rlpListShortHeader) {
         const size_size = @as(usize, payload[0] - rlpByteListLongHeader);
-
-        if (payload.len < 1 + size_size) {
-            return error.RlpPayloadTooShort;
-        }
-
-        try safeReadSliceIntBig(usize, payload[1 .. 1 + size_size], &size);
+        size = try readLongSize(payload, size_size);
         offset = 1 + size_size;
     } else if (payload[0] <= rlpListLongHeader) {
         size = @as(usize, payload[0] - rlpListShortHeader);
         offset = 1;
     } else {
         const size_size = @as(usize, payload[0] - rlpListLongHeader);
-
-        if (payload.len < 1 + size_size) {
-            return error.RlpPayloadTooShort;
-        }
-
-        try safeReadSliceIntBig(usize, payload[1 .. 1 + size_size], &size);
+        size = try readLongSize(payload, size_size);
         offset = 1 + size_size;
     }
     // Callers rely on `payload.len - offset` not underflowing when
