@@ -147,23 +147,7 @@ fn validate(arena: Allocator, buf: []const u8) !void {
 }
 
 /// Invalid vectors this decoder accepts on purpose.
-const accepted_non_canonical = [_][]const u8{
-    "bytesShouldBeSingleByte00",
-    "bytesShouldBeSingleByte01",
-    "bytesShouldBeSingleByte7F",
-    "incorrectLengthInArray",
-    "leadingZerosInLongLengthArray1",
-    "leadingZerosInLongLengthArray2",
-    "leadingZerosInLongLengthList1",
-    "leadingZerosInLongLengthList2",
-    "nonOptimalLongLengthArray1",
-    "nonOptimalLongLengthArray2",
-    "nonOptimalLongLengthList1",
-    "nonOptimalLongLengthList2",
-    "randomRLP",
-    "wrongSizeList",
-    "wrongSizeList2",
-};
+const accepted_non_canonical = [_][]const u8{};
 
 test "official vectors: invalid encodings are rejected" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);

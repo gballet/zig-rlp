@@ -1,5 +1,6 @@
 const std = @import("std");
 const serialize = @import("serialize.zig").serialize;
+const RawValue = @import("serialize.zig").RawRLPValue;
 const common = @import("common.zig");
 const expect = std.testing.expect;
 const expectError = std.testing.expectError;
@@ -28,7 +29,16 @@ fn countRlpListItems(serialized: []const u8) !usize {
     return list_size;
 }
 
+// Integers and byte strings are encoded as strings, never as lists.
+fn rejectList(serialized: []const u8) !void {
+    if (serialized.len > 0 and serialized[0] >= rlpListShortHeader) return error.RlpExpectedString;
+}
+
 // Returns the amount of data consumed from `serialized`.
+//
+// Structs reject list elements past their last field. A struct that has to
+// tolerate them, e.g. for forward compatibility, declares
+// `pub const rlp_ignore_trailing = true;`.
 pub fn deserialize(comptime T: type, allocator: Allocator, serialized: []const u8, out: *T) !usize {
     if (comptime hasFn(T, "decodeFromRLP")) {
         return out.decodeFromRLP(allocator, serialized);
@@ -47,8 +57,11 @@ pub fn deserialize(comptime T: type, allocator: Allocator, serialized: []const u
                     @compileError("RLP integers must have a power-of-two bit width of at least 8; got " ++ @typeName(T));
                 }
             }
+            try rejectList(serialized);
             const r = try sizeAndDataOffset(serialized);
             if (r.size > serialized.len - r.offset) return error.RlpPayloadTooShort;
+            // zero is the empty string, any other leading zero byte is non-canonical
+            if (r.size > 0 and serialized[r.offset] == 0) return error.RlpNonCanonicalInt;
             try safeReadSliceIntBig(T, serialized[r.offset .. r.offset + r.size], out);
             return r.offset + r.size;
         },
@@ -76,11 +89,15 @@ pub fn deserialize(comptime T: type, allocator: Allocator, serialized: []const u
                 }
                 offset += try deserialize(field_type, allocator, serialized[offset..limit], &@field(out.*, field_name));
             }
+            if (offset != limit and !(@hasDecl(T, "rlp_ignore_trailing") and T.rlp_ignore_trailing)) {
+                return error.RlpTooManyElements;
+            }
 
             return limit;
         },
         .pointer => |ptr| switch (ptr.size) {
             .slice => if (ptr.child == u8) {
+                try rejectList(serialized);
                 const r = try sizeAndDataOffset(serialized);
                 if (r.size > serialized.len - r.offset) return error.RlpPayloadTooShort;
                 if (ptr.attrs.@"const") {
@@ -91,6 +108,7 @@ pub fn deserialize(comptime T: type, allocator: Allocator, serialized: []const u
                 }
                 return r.offset + r.size;
             } else {
+                if (serialized.len == 0) return error.RlpPayloadTooShort;
                 if (serialized[0] < rlpListShortHeader) {
                     return error.NotAnRLPList;
                 }
@@ -122,6 +140,7 @@ pub fn deserialize(comptime T: type, allocator: Allocator, serialized: []const u
             else => return error.UnsupportedType,
         },
         .array => |ary| if (@sizeOf(ary.child) == 1) {
+            try rejectList(serialized);
             const r = try sizeAndDataOffset(serialized);
             if (r.size > serialized.len - r.offset) return error.RlpPayloadTooShort;
             if (r.size != ary.len) return error.RlpInvalidLength;
@@ -335,7 +354,7 @@ const Header = struct {
     gas_used: u64,
     timestamp: i64,
     extra_data: []const u8,
-    mix_hash: u256,
+    mix_hash: [32]u8,
     nonce: [8]u8,
     base_fee_per_gas: ?u256,
     withdrawals_root: ?[32]u8,
@@ -345,13 +364,18 @@ const Header = struct {
 
 const Block = struct {
     header: Header,
+    transactions: []RawValue,
+    uncles: []RawValue,
+    withdrawals: []RawValue,
 };
 
 test "deserialize a shanghai block" {
     var b: Block = undefined;
 
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
     const rlp_bytes = @embedFile("testdata/shanghai_block_1.rlp");
-    _ = try deserialize(Block, std.testing.allocator, rlp_bytes[0..], &b);
+    _ = try deserialize(Block, arena.allocator(), rlp_bytes[0..], &b);
 }
 
 test "detects an invalid length serialization" {
@@ -454,17 +478,17 @@ test "short list at upper bound 0xf7" {
     // This exercises the very top of the [0xc0, 0xf7] range.
     var buf: [56]u8 = undefined;
     buf[0] = 0xf7;
-    // 55 bytes of payload: 11 x u8 items (each 1 byte, all >= 0x80 so each
-    // is a single-byte RLP element).
-    for (buf[1..]) |*b| b.* = 0x81;
+    // 55 bytes of payload: 55 single-byte items, each below 0x80 so it is
+    // its own encoding.
+    for (buf[1..]) |*b| b.* = 0x05;
     const rlp = buf[0..];
-    var out: []u8 = undefined;
-    const consumed = try deserialize([]u8, std.testing.allocator, rlp, &out);
+    var out: []u16 = undefined;
+    const consumed = try deserialize([]u16, std.testing.allocator, rlp, &out);
     defer std.testing.allocator.free(out);
     try std.testing.expect(consumed == rlp.len);
     try std.testing.expectEqual(@as(usize, 55), out.len);
-    for (out) |b| {
-        try std.testing.expectEqual(@as(u8, 0x81), b);
+    for (out) |v| {
+        try std.testing.expectEqual(@as(u16, 5), v);
     }
 }
 
@@ -510,13 +534,12 @@ test "deserialize integer from empty RLP value (regression: no OOB panic)" {
         try std.testing.expectEqual(@as(u8, 0), out);
     }
     // 0xc0 is an empty list; its value region is also zero-length. This is the exact
-    // devp2p Disconnect `[]` payload that crashed a real decode.
+    // devp2p Disconnect `[]` payload that crashed a real decode. An integer is
+    // never a list, so it is rejected rather than read as 0.
     {
         const rlp = [_]u8{0xc0};
         var out: u8 = 0xaa;
-        const consumed = try deserialize(u8, std.testing.allocator, &rlp, &out);
-        try std.testing.expectEqual(@as(usize, 1), consumed);
-        try std.testing.expectEqual(@as(u8, 0), out);
+        try std.testing.expectError(error.RlpExpectedString, deserialize(u8, std.testing.allocator, &rlp, &out));
     }
     // A value wider than the target type is rejected, not truncated or panicked.
     {
@@ -683,4 +706,64 @@ test "round-trip a nested structure" {
     try std.testing.expectEqual(in.inner, out.inner);
     try std.testing.expectEqual(in.hash, out.hash);
     try std.testing.expectEqual(in.tail, out.tail);
+}
+
+test "deserialize rejects non-canonical sizes" {
+    // A single byte below 0x80 is its own encoding, not a one-byte string.
+    var b: u8 = undefined;
+    try expectError(error.RlpNonCanonicalSize, deserialize(u8, std.testing.allocator, &[_]u8{ 0x81, 0x05 }, &b));
+    var s: []const u8 = undefined;
+    try expectError(error.RlpNonCanonicalSize, deserialize([]const u8, std.testing.allocator, &[_]u8{ 0x81, 0x7f }, &s));
+    // 0x80 itself does need the string header.
+    try expect(try deserialize(u8, std.testing.allocator, &[_]u8{ 0x81, 0x80 }, &b) == 2);
+    try expect(b == 0x80);
+
+    // Long-form lengths must not start with a zero byte.
+    var leading_zero: [59]u8 = @splat(0xab);
+    leading_zero[0..3].* = .{ 0xb9, 0x00, 0x38 };
+    try expectError(error.RlpNonCanonicalSize, deserialize([]const u8, std.testing.allocator, &leading_zero, &s));
+
+    // ...and are only used for payloads longer than 55 bytes.
+    try expectError(error.RlpNonCanonicalSize, deserialize([]const u8, std.testing.allocator, &[_]u8{ 0xb8, 0x02, 0xab, 0xcd }, &s));
+    var list: []u16 = undefined;
+    try expectError(error.RlpNonCanonicalSize, deserialize([]u16, std.testing.allocator, &[_]u8{ 0xf8, 0x02, 0x01, 0x02 }, &list));
+}
+
+test "deserialize rejects non-canonical integers" {
+    var out: u32 = undefined;
+    try expectError(error.RlpNonCanonicalInt, deserialize(u32, std.testing.allocator, &[_]u8{ 0x82, 0x00, 0x01 }, &out));
+    // Zero is the empty string, not a zero byte.
+    try expectError(error.RlpNonCanonicalInt, deserialize(u32, std.testing.allocator, &[_]u8{0x00}, &out));
+    try expect(try deserialize(u32, std.testing.allocator, &[_]u8{0x80}, &out) == 1);
+    try expect(out == 0);
+}
+
+test "deserialize rejects lists where strings are expected" {
+    const list = [_]u8{ 0xc2, 0x01, 0x02 };
+    var int: u32 = undefined;
+    try expectError(error.RlpExpectedString, deserialize(u32, std.testing.allocator, &list, &int));
+    var bytes: []const u8 = undefined;
+    try expectError(error.RlpExpectedString, deserialize([]const u8, std.testing.allocator, &list, &bytes));
+    var ary: [2]u8 = undefined;
+    try expectError(error.RlpExpectedString, deserialize([2]u8, std.testing.allocator, &list, &ary));
+}
+
+test "deserialize a struct rejects trailing list elements" {
+    const S = struct { a: u8 };
+    var s: S = undefined;
+    try expectError(error.RlpTooManyElements, deserialize(S, std.testing.allocator, &[_]u8{ 0xc2, 0x01, 0x02 }, &s));
+
+    // Structs can opt into ignoring them, e.g. for forward compatibility.
+    const Lenient = struct {
+        a: u8,
+        pub const rlp_ignore_trailing = true;
+    };
+    var l: Lenient = undefined;
+    try expect(try deserialize(Lenient, std.testing.allocator, &[_]u8{ 0xc2, 0x01, 0x02 }, &l) == 3);
+    try expect(l.a == 1);
+}
+
+test "deserialize a slice from an empty buffer" {
+    var out: []u32 = undefined;
+    try expectError(error.RlpPayloadTooShort, deserialize([]u32, std.testing.allocator, &[_]u8{}, &out));
 }
